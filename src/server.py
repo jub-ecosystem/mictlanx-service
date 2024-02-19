@@ -47,7 +47,7 @@ peers     = list(Utils.peers_from_str_v2(peers_str=peers_env,separator=" ", prot
 MICTLANX_API_VERSION = os.environ.get("MICTLANX_API_VERSION","4")
 # print(peers)
 
-app = FastAPI(root_path=os.environ.get("OPENAPI_PREFIX","/mictlanxfm"))
+app = FastAPI(root_path=os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"))
 
 app.add_middleware(
     CORSMiddleware,
