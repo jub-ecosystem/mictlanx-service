@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI,Response,HTTPException,status,Header,UploadFile
+from fastapi import FastAPI,Response,HTTPException,Header,UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,11 +8,10 @@ from fastapi.responses import JSONResponse
 from mictlanx.v4.interfaces.responses import GetMetadataResponse,PutMetadataResponse,PutChunkedResponse
 from mictlanx.logger.log import Log
 from mictlanx.v4.interfaces.index import Peer,PeerStats
-
-from queue import Queue
-from threading import Thread
 import asyncio
 from asyncio import Lock
+from queue import Queue
+from threading import Thread
 from typing import List,Dict,Any,Tuple,Union,Set,AsyncGenerator,Generator
 from typing_extensions import Annotated
 import requests as R
@@ -22,31 +21,54 @@ import humanfriendly as HF
 from mictlanx.utils.index import Utils
 from option import NONE,Some,Option,Result
 from fastapi.middleware.gzip import GZipMiddleware
+from mictlanx.logger.tezcanalyticx.tezcanalyticx import TezcanalyticXHttpHandler
 from interfaces.dto.metadata import Metadata
-# from threading import Lock
+from interfaces.dto.index import Peer as PeerPayload
+from interfaces.healer import PeerHealer
+from interfaces.garbagcollector import MictlanXFMGarbageCollector
 
-
-# from mictlanx.v4.interfaces.index import PeerStats
-
-
+LOGGER_NODE = os.environ.get("LOGGER_NAME","mictlanx-router-0")
+TEZCANALYTICX_ENABLED = bool(int(os.environ.get("TEZCANALYTICX_ENABLE","0")))
 
 log            = Log(
-        name   = "mictlanx-fm-0",
-        console_handler_filter=lambda x: True,
-        interval=24,
-        when="h",
-        path=os.environ.get("LOG_PATH","/log")
+        name                   = LOGGER_NODE,
+        console_handler_filter = lambda x: True,
+        interval               = 24,
+        when                   = "h",
+        path                   = os.environ.get("LOG_PATH","/log")
 )
+# log.propagate = False
+if TEZCANALYTICX_ENABLED :
+    tezcanalytix_handler =  TezcanalyticXHttpHandler(
+        flush_timeout= os.environ.get("TEZCANALYTICX_FLUSH_TIMEOUT","10s"),
+        buffer_size= int(os.environ.get("TEZCANALYTICX_BUFFER_SIZe","100")),
+        path= os.environ.get("TEZCANALYTICX_PATH","/api/v4/events/"),
+        port= int(os.environ.get("TEZCANALYTICX_PORT","45000")),
+        hostname= os.environ.get("TEZCANALYTICX_HOSTNAME"),
+        level= int(os.environ.get("TEZCANALYTICX_LEVEL","0")),
+        protocol=os.environ.get("TEZCANALYTICX_PROTOCOL","http")
+    )
+    log.addHandler(tezcanalytix_handler)
+
+# _________________________________________
 replicas_map:Dict[str, Set[str]] = {}
 lock = Lock()
+
 # peers_env = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:alpha.tamps.cinvestav.mx/v0/mictlanx/peer0:-1 mictlanx-peer-1:alpha.tamps.cinvestav.mx/v0/mictlanx/peer1:-1")
-peers_env = os.environ.get("MICTLANX_PEERS","peer-0:148.247.201.141:7000 peer-1:148.247.201.226:7001")
-# peers_env = os.environ.get("MICTLANX_PEERS","peer-0:localhost:7000 peer-1:localhost:7001 peer-2:localhost:7002")
+# peers_env = os.environ.get("MICTLANX_PEERS","peer-0:148.247.201.141:7000 peer-1:148.247.201.226:7001")
+peers_env = os.environ.get("MICTLANX_PEERS","peer-0:localhost:7000 peer-1:localhost:7001 peer-2:localhost:7002")
 protocol  = os.environ.get("MICTLANX_PROCOTOL","http")
 peers     = list(Utils.peers_from_str_v2(peers_str=peers_env,separator=" ", protocol=protocol,) )
 MICTLANX_API_VERSION = os.environ.get("MICTLANX_API_VERSION","4")
-# print(peers)
+PEER_HEALER_HEARTBEAT = os.environ.get("MICTLANX_PEER_HEALER_HEARTBEAT","30sec")
+GC_HEARTBEAT = os.environ.get("MICTLANX_GC_HEARTBEAT","5sec")
 
+ph = PeerHealer(
+    q = Queue(maxsize=100),
+    peers=peers,
+    name="mictlanx-fm-peer-healer-0",
+)
+gc = MictlanXFMGarbageCollector(ph=ph, api_version=MICTLANX_API_VERSION)
 app = FastAPI(root_path=os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"))
 
 app.add_middleware(
@@ -79,159 +101,56 @@ app.openapi = generate_openapi
 
 # .openapi()
 
-class PeerHealer(Thread):
-    def __init__(self,q:Queue,peers:List[Peer],heartbeat:str="5sec",name: str="mictlanx-peer-healer-0", daemon:bool = True, show_logs:bool=False) -> None:
-        Thread.__init__(self,name=name,daemon=daemon)
-        self.is_running = True
-        self.heartbeat = HF.parse_timespan(heartbeat)
-        # self.lock = Lock()
-        self.operations_counter = 0
-        self.peers=peers
-        self.unavailable_peers = []
-        # self.available_peers = []
-        self.__peer_stats:Dict[str, PeerStats] = {}
-        self.q= q
-        # self.peers:List[LoadBalancingBin] = list(map(lambda x: , peers))
-        # self.tasks:List[Task] = []
-        self.completed_tasks:List[str] = []
-        self.__log             = Log(
-            name = "mictlanx-peer-healer-0",
-            console_handler_filter=lambda x: show_logs,
-            interval=24,
-            when="h"
-        )
-
-    def ufs(self)->Dict[str,float]:
-        # for (key, stats) in self.__peer_stats.items():
-            # uf = stats.calculate_disk_uf()
-
-        # self.__peer_stats
-        return dict([ (key,stats.calculate_disk_uf()) for (key,stats) in self.__peer_stats.items() ])
-    def get_peer(self,peer_id:str)->Option[Peer]:
-        if not peer_id in self.unavailable_peers:
-            maybe_peer = next( (  peer for peer in self.peers if peer.peer_id == peer_id ), None)
-            if maybe_peer is None:
-                return NONE
-            else:
-                return Some(maybe_peer)
-
-    def get_stats(self):
-        return self.__peer_stats
-    # def get(task_id:str)->Result[]
-    def run(self) -> None:
-        while True:
-            try:
-                peers= self.peers
-                counter = 0
-                # unavailable_peers =[]
-                self.unavailable_peers = []
-                for peer in peers:
-                    get_ufs_response = peer.get_ufs()
-                    if get_ufs_response.is_ok:
-                        response = get_ufs_response.unwrap()
-                        peer_stats = self.__peer_stats.get(peer.peer_id,PeerStats(peer_id=peer.peer_id))
-
-                        peer_stats.total_disk = response.total_disk
-                        peer_stats.used_disk  = response.used_disk
-                        self.__peer_stats[peer.peer_id] = peer_stats
-                        counter +=1
-                        self.__log.debug("Peer {} is  available".format(peer.peer_id))
-                    else:
-                        # self.peers
-                        self.unavailable_peers.append(peer.peer_id)
-                        self.__log.error("Peer {} is not available.".format(peer.peer_id))
-                        
-                        
-                percentage_available_peers =  (counter / len(peers))*100 
-                if percentage_available_peers == 0:
-                    self.__log.error("No available peers. Please contact me on jesus.castillo.b@cinvestav.mx")
-                    # for peer_id in self.unavailable_peers:
-                        # self.q.put(UnavilablePeer(peer_id=peer_id))
-                    raise Exception("No available peers. Please contact me on jesus.castillo.b@cinvestav.mx")
-                # elif percentage_available_peers < 100:
-                    # for peer_id in self.unavailable_peers:
-                        # self.q.put(UnavilablePeer(peer_id=peer_id))
-                self.__log.debug("{}% of the peers are available".format(percentage_available_peers ))
-            except R.exceptions.HTTPError as e:
-                # return HTTPException(status_code=e.response.status_code, detail=str(e.response.content.decode("utf-8")))
-                self.__log.error({
-                    "msg":str(e.response.content.decode("utf8") ),
+async def run_async_healer(heartbeat:str="10s"):
+    _heartbeat = HF.parse_timespan(heartbeat)
+    while True:
+        try:
+            async with lock:
+                log.debug({
+                    "event":"ASYNC_HEALER",
+                    "health_nodes":len(ph.peers),
+                    "peers_ids":ph.peers_ids(),
                 })
-                continue
-            except Exception as e:
-                self.__log.error({
-                    "msg":str(e),
+                ph.run()
+                
+        except Exception as e:
+            pass
+        finally:
+            await asyncio.sleep(_heartbeat)
+
+async def run_garbage_collector(heartbeat:str="30s"):
+    _heartbeat = HF.parse_timespan(heartbeat)
+    while True:
+        try:
+            async with lock:
+                await gc.run()
+                log.debug({
+                    "event":"GARBAGE_COLLECTOR"
                 })
-                continue
-            finally:
-                T.sleep(self.heartbeat)
-                # print(e)
-
-
-class MictlanXFMGarbageCollector(Thread):
-    """
-        This class represents the daemon thread that executes every <hearbeat> seconds.
-    """
-    def __init__(self,heartbeat:str="30sec",name: str="mictlanx-gc-0", daemon:bool = True) -> None:
-        Thread.__init__(self,name=name,daemon=daemon)
-        self.is_running = True
-        self.heartbeat = HF.parse_timespan(heartbeat)
-        self.__log = Log(
-            name = "mictlanx-fm-0",
-            console_handler_filter=lambda x: True,
-            interval=24,
-            when="h"
-        )
-    def run(self) -> None:
-        while self.is_running:
-            for peer in peers:
-                try:
-                    responses:List[Tuple[Peer, Dict[str,Any]]] = []
-                    headers = {}
-                    url = "{}/api/v{}/stats".format(peer.base_url(),MICTLANX_API_VERSION)
-                    response = R.get(url,headers=headers)
-                    response.raise_for_status()
-                    res_json = response.json()
-                    # print("CHECK_CONSISTENCY", peer.peer_id)
-                    responses.append((peer,res_json))
-                    # ________________________________
-                    
-                    for (peer,stats) in responses:
-                        balls = stats["balls"]
-                        for ball in balls:
-                            bucket_id = ball["bucket_id"]
-                            key       = ball["key"]
-                            checksum  = ball["checksum"]
-                except R.exceptions.HTTPError as e:
-                    self.__log.error({
-                        "msg":str(e.response.content.decode("utf8") ),
-                    })
-                    continue
-                except R.exceptions.ConnectionError as e:
-                    self.__log.error({
-                        "msg":"Connection error - {} / {}:{}".format(peer.peer_id,peer.ip_addr,peer.port),
-                    })
-                    continue
-
-                except Exception as e:
-                    self.__log.error({
-                        "msg":str(e)
-                    })
-                    continue
-                finally:
-                    T.sleep(self.heartbeat)
-                # peer.get
+        except Exception as e:
+            pass
+        finally:
+            await asyncio.sleep(_heartbeat)
 
 
 
 
+class Pool(object):
+    def __init__(self,ph:PeerHealer,peers:List[Peer]=[]):
+        self.peers = peers
+        self.ph = ph
+    def delete_all(self,bucket_id:str, key:str,check_peers:bool=False)->List[Peer]:
+        if check_peers:
+            self.peers = self.ph.peers
+        failed_peers = []
+        for peer in self.peers:
+            result = peer.delete(bucket_id=bucket_id,key=key)
+            if result.is_err:
+                failed_peers.append(peer)
+        return failed_peers
 
-#Start the thread
-tz = MictlanXFMGarbageCollector()
-tz.start()
 
-ph = PeerHealer(q = Queue(maxsize=100),peers=peers,name="mictlanx-fm-peer-healer-0")
-ph.start()
+
 
 class LoadBalancer(object):
     def __init__(self, algorithm,peer_healer:PeerHealer):
@@ -258,9 +177,34 @@ class LoadBalancer(object):
 lb = LoadBalancer(algorithm=os.environ.get("MICTLANX_FM_LB_ALGORITHM","ROUND_ROBIN"), peer_healer=ph)
 
 
+async def fx(peer:PeerPayload):
+    async with lock:
+        status = ph.add_peer(peer.to_v4peer())
+        log.debug({
+            "event":"PEER.ADDED",
+            "peer_id":peer.peer_id,
+            "protocol":peer.protocol,
+            "hostname":peer.hostname,
+            "port":peer.port,
+            "status":status
+        })
+        print(ph.peers)
+
+@app.post("/api/v4/peers")
+async def add_peer(peer:PeerPayload):
+    try:
+        asyncio.gather(
+            fx(peer=peer)
+        )
+        return Response(content=None, status_code=204)
+    except R.exceptions.HTTPError as e:
+        return HTTPException(status_code=e.response.status_code, detail=str(e.response.content.decode("utf-8")))
+    except Exception as e :
+        return HTTPException(status_code=400, detail=str(e))
+
 
 @app.get("/api/v4/peers/stats")
-def get_peers_stats():
+async def get_peers_stats():
     responses = []
     for peer in peers:
         headers = {}
@@ -362,8 +306,11 @@ async def put_data_chunked(
     task_id:str,
     data:UploadFile,
     chunk_size:Annotated[Union[str,None], Header()]="10mb",
-    peer_id:Annotated[Union[str,None], Header()]=None
+    peer_id:Annotated[Union[str,None], Header()]=None,
+    # update:Annotated[Union[bool,None], Header()]=False
 ):
+    # if update:
+        
     try:
         if not peer_id:
             peer = lb.lb_round_robin(operation_type="put")
@@ -500,10 +447,15 @@ async def get_data(
 
 
 
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(run_async_healer( heartbeat= PEER_HEALER_HEARTBEAT))
+    asyncio.create_task(run_garbage_collector(GC_HEARTBEAT) )
+
 if __name__ =="__main__":
     uvicorn.run(
         host=os.environ.get("IP_ADDR","0.0.0.0"), 
         port=int(os.environ.get("PORT","60666")),
         reload=bool(int(os.environ.get("REALOAD","1"))),
-        app=app
+        app="server:app"
     )
