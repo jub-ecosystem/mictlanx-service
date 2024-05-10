@@ -29,6 +29,16 @@ You must meet the prerequisites to run successfully the MictlanX Client:
 	pip3 install -r ./requirements.txt
 	```
 <!-- CONTRIBUTING -->
+
+## Building
+```sh
+docker build -f ./Dockerfile -t nachocode/mictlanx:router .
+```
+
+## Deploying
+```sh
+```
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
