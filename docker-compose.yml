@@ -1,0 +1,39 @@
+version: "3"
+services:
+  mictlanx-router-0:
+    image: nachocode/mictlanx:router
+    container_name:  mictlanx-router-0
+    environment:
+      - LOGGER_NAME=mictlanx-router-0
+      - LOG_PATH=/log
+      - TEZCANALYTICX_FLUSH_TIMEOUT=10s
+      - TEZCANALYTICX_BUFFER_SIZE=100
+      - TEZCANALYTICX_PATH=/api/v4/events
+      - TEZCANALYTICX_PORT=45000
+      - TEZCANALYTICX_HOSTNAME=tezcanalyticx-0
+      - TEZCANALYTICX_LEVEL=0
+      - TEZCANALYTICX_PROTOCOL=http
+      - TEZCANALYTICX_ENABLE=0
+      - MICTLANX_PEERS=peer-0:localhost:7000
+      - MICTLANX_PROCOTOL=http
+      - MICTLANX_API_VERSION=4
+      - MICTLANX_PEER_HEALER_HEARTBEAT=30sec
+      - MICTLANX_GC_HEARTBEAT=60sec
+      - MICTLANX_ROUTER_HOST=${MICTLANX_ROUTER_HOST-0.0.0.0}
+      - MICTLANX_ROUTER_PORT=${MICTLANX_ROUTER_PORT-60666}
+    command: uvicorn mictlanxrouter.server:app --host ${MICTLANX_ROUTER_HOST-0.0.0.0} --port ${MICTLANX_ROUTER_PORT-60666}
+    ports:
+      - ${MICTLANX_ROUTER_PORT-60666}:${MICTLANX_ROUTER_PORT-60666}
+    volumes:
+      - mictlanx-router-0_logs:/log
+    networks:
+      - mictlanx
+    restart: unless-stopped
+
+
+volumes:
+  mictlanx-router-0_logs:
+
+networks:
+  mictlanx:
+    external: true
