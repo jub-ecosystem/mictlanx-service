@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "mictlanxrouter"
+version = "0.0.1"
+description = ""
+authors = ["Ignacio Castillo <ignacio.bcastillo@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+option = "^2.1.0"
+nanoid = "^2.0.0"
+pydantic = "^2.7.1"
+fastapi = "^0.110.2"
+uvicorn = "^0.29.0"
+python-multipart = "^0.0.9"
+aiorwlock = "^1.4.0"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.1.1"
+more-itertools = "^10.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "test"
+url = "https://test.pypi.org/simple/"
+priority = "supplemental"
