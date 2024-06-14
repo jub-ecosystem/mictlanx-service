@@ -12,25 +12,35 @@ from mictlanx.v4.interfaces.index import Peer
 import asyncio
 from asyncio import Lock
 from queue import Queue
-from typing import List,Dict,Any,Tuple,Union,Set,Iterator
+from typing import List,Dict,Tuple,Union,Set,Iterator
 from typing_extensions import Annotated
 import requests as R
 import uvicorn
 import time as T
 import humanfriendly as HF
 from mictlanx.utils.index import Utils
-from option import Result
+from option import Result,NONE,Some,Ok,Err
 from fastapi.middleware.gzip import GZipMiddleware
+from mictlanx.interfaces.responses import SummonContainerResponse
 from mictlanx.logger.tezcanalyticx.tezcanalyticx import TezcanalyticXHttpHandler
 from mictlanxrouter.interfaces.dto.metadata import Metadata
 from mictlanxrouter.interfaces.dto.index import Peer as PeerPayload,DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.interfaces.healer import PeerHealer
 from mictlanxrouter.interfaces.garbagcollector import MictlanXFMGarbageCollector
-from mictlanxrouter.helpers.utils import Utils as LocalUtils
-from mictlanxrouter.replication import Replicator
+# from mictlanxrouter.helpers.utils import Utils as LocalUtils
+from mictlanxrouter.replication import Replicator,ReplicationEvent
 import random as RND
 from mictlanx.v4.interfaces.index import PeerStats
 import aiorwlock
+from asyncio.queues import Queue
+from mictlanx.interfaces.payloads import SummonContainerPayload,ExposedPort
+from mictlanx.v4.summoner.summoner import  Summoner
+from mictlanx.interfaces.payloads import MountX
+from ipaddress import IPv4Network
+from mictlanxrouter.interfaces.dto.index import ElasticPayload
+
+REPLICATOR_QUEUE_MAXSIZE = int(os.environ.get("REPLICATOR_QUEUE_MAXSIZE","100"))
+replicator_queue = Queue(maxsize= REPLICATOR_QUEUE_MAXSIZE )
 
 LOGGER_NODE = os.environ.get("LOGGER_NAME","mictlanx-router-0")
 TEZCANALYTICX_ENABLED = bool(int(os.environ.get("TEZCANALYTICX_ENABLE","0")))
@@ -56,23 +66,43 @@ if TEZCANALYTICX_ENABLED :
     log.addHandler(tezcanalytix_handler)
 
 # _________________________________________
+
+
+
+    
+        # diff2 = selected_replicas_peers.difference(current_replicas)
+
+        
+
+
+
+
+
+
+
 replicas_map:Dict[str, Set[str]] = {}
 lock = Lock()
 rwlock = aiorwlock.RWLock(fast=bool(int(os.environ.get("MICTLANX_ROUTER_SYNC_FAST","1"))))
 rwlock2 = aiorwlock.RWLock(fast=bool(int(os.environ.get("MICTLANX_ROUTER_SYNC_FAST","1"))))
 
-# peers_env = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:alpha.tamps.cinvestav.mx/v0/mictlanx/peer0:-1 mictlanx-peer-1:alpha.tamps.cinvestav.mx/v0/mictlanx/peer1:-1")
-# peers_env = os.environ.get("MICTLANX_PEERS","peer-0:148.247.201.141:7000 peer-1:148.247.201.226:7001")
-peers_env = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:7000 mictlanx-peer-1:localhost:7001 mictlanx-peer-2:localhost:7002")
-protocol  = os.environ.get("MICTLANX_PROCOTOL","http")
-peers     = list(Utils.peers_from_str_v2(peers_str=peers_env,separator=" ", protocol=protocol,) )
-MICTLANX_API_VERSION = os.environ.get("MICTLANX_API_VERSION","4")
-PEER_HEALER_HEARTBEAT = os.environ.get("MICTLANX_PEER_HEALER_HEARTBEAT","30sec")
-GC_HEARTBEAT = os.environ.get("MICTLANX_GC_HEARTBEAT","30sec")
-LB_ALGORITHM = os.environ.get("MICTLANX_LB_ALGORITHM","ROUND_ROBIN")
-MICTLANX_TIMEOUT = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
-
+peers_env                = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:25000 mictlanx-peer-1:localhost:25001 mictlanx-peer-2:localhost:25002")
+protocol                 = os.environ.get("MICTLANX_PROCOTOL","http")
+peers                    = list(Utils.peers_from_str_v2(peers_str=peers_env,separator=" ", protocol=protocol,) )
+MICTLANX_API_VERSION     = os.environ.get("MICTLANX_API_VERSION","4")
+PEER_HEALER_HEARTBEAT    = os.environ.get("MICTLANX_PEER_HEALER_HEARTBEAT","10sec")
+REPLICATOR_QUEUE_TIMEOUT = os.environ.get("MICTLANX_REPLICATOR_QUEUE_TIMEOUT","10sec")
+LB_ALGORITHM             = os.environ.get("MICTLANX_LB_ALGORITHM","ROUND_ROBIN")
+MICTLANX_TIMEOUT         = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
+PEER_BASE_PORT           = int(os.environ.get("PEER_BASE_PORT","25000"))
+MAX_PEERS                = int(os.environ.get("MAX_PEERS","10"))
+MAX_TTL                  = int(os.environ.get("MAX_TTL","3"))
+AVAILABLE_NODES          = os.environ.get("AVAILABLE_NODES","0;1;2;3;4;5;6;7;8;9;10").split(";")
+MAX_AFTER_ELASTICITY     = int(os.environ.get("MAX_AFTER_ELASTICITY","10"))
+SHOW_PEER_HEALER_LOGS    = bool(int(os.environ.get("SHOW_PEER_HEALER_LOGS","0")))
+SHOW_REPLICATOR_LOGS    = bool(int(os.environ.get("SHOW_REPLICATOR_LOGS","1")))
 # 
+DELAY                    = HF.parse_timespan(os.environ.get("DELAY","2s"))
+MAX_TRIES                = int(os.environ.get("MAX_TRIES","60"))
 
 log.debug({
     "event":"MICTLANX_ROUTER_STARTED",
@@ -80,26 +110,74 @@ log.debug({
     "protocol":protocol,
     "api_version":MICTLANX_API_VERSION,
     "peer_healer_heartbeat":PEER_HEALER_HEARTBEAT,
-    "gc_heartbeat":GC_HEARTBEAT,
+    "replicator_heartbeat":REPLICATOR_QUEUE_TIMEOUT,
     "load_balancing_algorithm":LB_ALGORITHM
 })
 
+
+async def run_rm():
+    global replicas_map
+    try:
+        async with rwlock2.writer_lock:
+            peers = ph.peers
+            ball_ids_global = []
+            raw_map = []
+            for peer in peers:
+                state_result = peer.get_state()
+                # print("STATE_RESUTKL", state_result,peer.peer_id)
+                
+                if state_result.is_ok:
+                    response = state_result.unwrap()
+                    # response.nodes[0].node_id
+                    for key,context in response.balls.items():
+                        raw_map.append((key, context.locations))
+                    ball_ids = list(response.balls.keys())
+                    ball_ids_global.extend(ball_ids)
+            replicas_map = {**replicas_map, **dict(raw_map)}
+        # replicas_map[]
+            print(ball_ids_global)
+                
+                    # print
+
+                # balls = peer.
+            # log.debug({
+                # "event":"ASYNC_HEALER",
+                # "health_nodes":len(ph.peers),
+                # "peers_ids":ph.peers_ids(),
+            # })
+    except Exception as e:
+        log.error(str(e))
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
+    t0 = asyncio.create_task(run_rm())
     t1= asyncio.create_task(run_async_healer( heartbeat= PEER_HEALER_HEARTBEAT))
     # t2= asyncio.create_task(run_garbage_collector(GC_HEARTBEAT) )
-    t2= asyncio.create_task(run_replicator(GC_HEARTBEAT) )
+    t2= asyncio.create_task(run_replicator() )
     yield
     t1.cancel()
     t2.cancel()
+
+
+
+summoner_api_version     = Some(int(os.environ.get("MICTLANX_SUMMONER_API_VERSION","3")))
+summoner_ip_addr = os.environ.get("MICTLANX_SUMMONER_IP_ADDR","localhost")
+summoner_port = int(os.environ.get("MICTLANX_SUMMONER_PORT","15000"))
+SUMMONER_MODE = os.environ.get("MICTLANX_SUMMONER_MODE","docker")
+summoner        = Summoner(
+    ip_addr     = summoner_ip_addr, 
+    port        = summoner_port, 
+    api_version = summoner_api_version,
+    network= Some(IPv4Network(os.environ.get("MICTLANX_SUMMONER_SUBNET","10.0.0.0/25")))
+)
 
 ph = PeerHealer(
     q = Queue(maxsize=100),
     peers=peers,
     name="mictlanx-fm-peer-healer-0",
-    show_logs=False
+    show_logs=SHOW_PEER_HEALER_LOGS
 )
-replicator = Replicator(ph=ph, show_logs=True)
+replicator = Replicator(queue= replicator_queue,ph=ph, show_logs=SHOW_REPLICATOR_LOGS)
 gc = MictlanXFMGarbageCollector(ph=ph, api_version=MICTLANX_API_VERSION)
 app = FastAPI(
     root_path=os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"),
@@ -153,48 +231,183 @@ async def run_async_healer(heartbeat:str="10s"):
         finally:
             await asyncio.sleep(_heartbeat)
 
-async def run_garbage_collector(heartbeat:str="30s"):
-    _heartbeat = HF.parse_timespan(heartbeat)
-    while True:
-        try:
-            async with rwlock2.writer_lock:
-                await gc.run()
-                log.debug({
-                    "event":"GARBAGE_COLLECTOR"
-                })
-        except Exception as e:
-            pass
-        finally:
-            await asyncio.sleep(_heartbeat)
-
-
-async def run_replicator(heartbeat:str="1m"):
-    _heartbeat = HF.parse_timespan(heartbeat)
+async def run_replicator():
+    global log
     global replicator
+    global ph
+    global replicas_map
 
+    timeout = HF.parse_timespan(REPLICATOR_QUEUE_TIMEOUT)
+    counter = 0
     while True:
         try:
-            await replicator.run()
+            element:ReplicationEvent = await asyncio.wait_for(replicator_queue.get(), timeout=timeout )
+
+            if element.ttl >=  MAX_TTL:
+                log.error({
+                    "msg":"Replication max ttl reached",
+                    "bucket_id":element.bucket_id,
+                    "key":element.key,
+                    "from_peer_id":element.from_peer_id,
+                    "current_ttl":element.ttl,
+                    "max_ttl":MAX_TTL
+                })
+                continue
+
+            # Check if the replication type if data
+            if element.rtype == "DATA":
+                # 
+                async with rwlock2.reader_lock:
+                    result = await replicator.run(event=element)
+                    current_peers = ph.peers.copy()
+                    if result.left_replicas > 0 and len(current_peers) < element.rf :
+                        current_peers = ph.peers.copy()
+                        available_replica_peers =   len(current_peers) - len(result.replicas) 
+                        target_pool_size = (available_replica_peers+(result.left_replicas - available_replica_peers) if available_replica_peers < result.left_replicas else result.left_replicas) + len(current_peers)
+                        log.info({
+                            "event":"ELASTICITY",
+                            "bucket_id": element.bucket_id,
+                            "key": element.key,
+                            "current_pool_size":len(current_peers),
+                            "left_replicas": result.left_replicas,
+                            "available_peers":available_replica_peers,
+                            "target_pool_size":target_pool_size
+                        })
+                    else:
+                        target_pool_size = len(ph.peers)
+                        
+                async with rwlock.writer_lock:
+                    curent_replicas:Set[str] = replicas_map.setdefault(result.combined_key_str,set([]))
+                    curent_replicas.union(set(result.replicas))
+                    replicas_map[result.combined_key_str] = curent_replicas
+                element.ttl +=1
+                await replicator_queue.put(ReplicationEvent(rtype="SYSTEM", rf=target_pool_size , ttl= element.ttl ))
+                await asyncio.sleep(MAX_AFTER_ELASTICITY)
+                await replicator_queue.put(element)
+                log.debug({
+                    "event":"DATA.REPLICATION.EVENT",
+                    "bucket_id":element.bucket_id,
+                    "key": element.key,
+                    "left_replicas":result.left_replicas
+                })
+            else:
+                start_time = T.time()
+                async with rwlock2.reader_lock:
+                    current_peers = ph.peers.copy()
+                    current_peers_len = len(current_peers)
+                    diff = element.rf - current_peers_len
+
+                if current_peers_len>= MAX_PEERS:
+                    log.error({
+                        "msg":"MAX_PEERS reached",
+                        "max_peers":MAX_PEERS,
+                        "current_peers":current_peers_len
+                    })
+                    continue
+                if current_peers_len >= element.rf:
+                    response_time = T.time()- start_time
+                    log.debug({
+                        "event":"POOL.CHECK",
+                        "pool_size": current_peers_len,
+                        "rf":element.rf
+                    })
+                    continue
+           
+                failed                      = 0
+                tasks                       = []
+                deployed_peer_info          = []
+                for task_index in range(diff):
+                    selected_node           = int(AVAILABLE_NODES[counter%len(AVAILABLE_NODES)])
+                    peer_index              = task_index + current_peers_len
+                    current_container_id    = "mictlanx-peer-{}".format(peer_index)
+                    port                    = PEER_BASE_PORT+peer_index
+                    deployed_peer_info.append((current_container_id,port))
+                    task                    = deploy_peer(
+                        container_id=current_container_id,
+                        port=port,
+                        disk=element.disk,
+                        memory= element.memory,
+                        selected_node=selected_node,
+                        workers= element.workers
+                    )
+                    tasks.append(task)
+                    counter+=1
+                
+                
+                async with rwlock2.reader_lock:
+                    deployed_peer_info += list(ph.get_tupled_peers())
+                responses:List[Result[Tuple[str,int, SummonContainerPayload],Exception]] = await asyncio.gather(*tasks)
+                
+                for (current_container_id, current_container_port, summon_result) in responses:
+                    # _start_time = T.time()
+                    if summon_result.is_err:
+                        failed+=1
+                        log.error({
+                            "detail":str(summon_result.unwrap_err())
+                        })
+                    else:
+                        response = summon_result.unwrap()
+                        async with rwlock2.writer_lock:
+                            peer = Peer(
+                                    peer_id=current_container_id,
+                                    ip_addr=current_container_id,
+                                    port=current_container_port,
+                                    protocol=element.protocol
+                            )
+                            ph.add_peer(peer=peer)
+                        for (other_peer_id, other_peer_port) in deployed_peer_info:
+                            if not current_container_id == other_peer_id:
+                                op_start_time = T.time()
+                                
+
+                                added_peer_result = peer.add_peer_with_retry(
+                                    id=other_peer_id,
+                                    disk=element.disk,
+                                    memory= element.memory,
+                                    ip_addr= other_peer_id,
+                                    port=other_peer_port,
+                                    weight=1,
+                                    delay=DELAY,
+                                    tries= MAX_TRIES
+                                )
+                                
+                                rt = T.time() - op_start_time
+                                log.info({
+                                    "event":"ADDED.OTHER.PEER",
+                                    "peer_id":peer.peer_id,
+                                    "added_peer_id":other_peer_id,
+                                    "added_peer_port":other_peer_port, 
+                                    "response_time":rt
+                                })
+                response_time = T.time()- start_time
+                log.info({
+                    "event":"SYSTEM.REPLICATION.EVENT",
+                    "rf":element.rf,
+                    "pool_size":len(current_peers)+(diff-failed),
+                    "diff":diff,
+                    "failed":failed,
+                    "response_time":response_time
+                })
+
+        except asyncio.TimeoutError  as e:
+            log.warn({
+                "detail":"Replicator queue timeout. No replication event has been arrived.",
+                "timeout":REPLICATOR_QUEUE_TIMEOUT
+            })
+            # log.error({
+            #     "detail":"Replicator queue timeout. No replication event has been arrived.",
+            #     "timeout":REPLICATOR_QUEUE_TIMEOUT
+            # })
         except Exception as e:
-            print(e)
-        finally:
-            await asyncio.sleep(_heartbeat)
+            log.error({
+                "msg":str(e)
+            })
+        # finally:
+            # await asyncio.sleep(_heartbeat)
         
 
 
-# class Pool(object):
-#     def __init__(self,ph:PeerHealer,peers:List[Peer]=[]):
-#         self.peers = peers
-#         self.ph = ph
-#     def delete_all(self,bucket_id:str, key:str,check_peers:bool=False)->List[Peer]:
-#         if check_peers:
-#             self.peers = self.ph.peers
-#         failed_peers = []
-#         for peer in self.peers:
-#             result = peer.delete(bucket_id=bucket_id,key=key)
-#             if result.is_err:
-#                 failed_peers.append(peer)
-#         return failed_peers
+
 
 
 
@@ -286,6 +499,221 @@ class LoadBalancer(object):
 lb = LoadBalancer(algorithm=os.environ.get("MICTLANX_FM_LB_ALGORITHM","ROUND_ROBIN"), peer_healer=ph)
 
 
+
+
+
+
+async def deploy_peer(container_id:str,port:int,disk:int,memory:int,workers:int, selected_node:int=0)->Tuple[str, int,Result[SummonContainerResponse,Exception]]:
+    # selected_node = 0
+    # container_id    = "mictlanx-peer-{}".format(i)
+    
+    _start_time = T.time()
+    payload         = SummonContainerPayload(
+        container_id=container_id,
+        image=os.environ.get("MICTLANX_PEER_IMAGE","nachocode/mictlanx:peer"),
+        hostname    = container_id,
+        exposed_ports=[ExposedPort(NONE,port,port,NONE)],
+        envs= {
+            "USER_ID":"6666",
+            "GROUP_ID":"6666",
+            "BIN_NAME":"peer",
+            "NODE_ID":container_id,
+            "NODE_PORT":str(port),
+            "IP_ADDRESS":container_id,
+            "SERVER_IP_ADDR":"0.0.0.0",
+            "NODE_DISK_CAPACITY":str(disk),
+            "NODE_MEMORY_CAPACITY":str(memory),
+            "BASE_PATH":"/app/mictlanx",
+            "LOCAL_PATH":"/app/mictlanx/local",
+            "DATA_PATH":"/app/mictlanx/data",
+            "LOG_PATH":"/app/mictlanx/log",
+            "MIN_INTERVAL_TIME":"15",
+            "MAX_INTERVAL_TIME":"60",
+            "WORKERS":str(workers)
+        },
+        memory=1000000000,
+        cpu_count=1,
+        mounts=[
+            MountX(source="{}-data".format(container_id), target="/app/mictlanx/data", mount_type=1),
+            MountX(source="{}-log".format(container_id), target="/app/mictlanx/log", mount_type=1),
+            MountX(source="{}-local".format(container_id), target="/app/mictlanx/local", mount_type=1),
+        ],
+        network_id="mictlanx",
+        selected_node=Some(str(selected_node)),
+        force=Some(True)
+    )
+    # print(payload.to_dict())
+    response        = summoner.summon(
+        mode= SUMMONER_MODE,
+        payload=payload, 
+    )
+    rt = T.time() - _start_time
+    log.info({
+        "event":"ADD.PEER",
+        "peer_id":container_id,
+        "disk":HF.format_size(disk),
+        "memory":HF.format_size(memory),
+        "selected_agent":selected_node,
+        "port":port,
+        "response_time":rt
+    })
+    return (container_id,port ,response)
+    # if response.is_err:
+    #     failed+=1 
+    #     log.error({
+    #         "detail":str(response.unwrap_err())
+    #     })
+
+
+
+
+@app.get("/api/v4/replicamap")
+async def get_replica_map():
+    global replicas_map
+    async with rwlock.reader_lock:
+        return JSONResponse(content=jsonable_encoder(replicas_map))
+
+
+@app.post("/api/v4/elastic/async")
+async def elastic(
+    replication_event:ReplicationEvent
+):
+    global replicator_queue
+    global log
+    try:
+        start_time = T.time()
+        await replicator_queue.put(item= replication_event)
+        response_time = T.time() - start_time
+        return JSONResponse(
+            content=jsonable_encoder(
+                {
+                    "replication_event_id":replication_event.id,
+                    "response_time":response_time
+                }
+            )
+        )
+    except Exception as e:
+        log.error({
+            "msg":str(e)
+        })
+        raise e
+
+@app.post("/api/v4/elastic")
+async def elastic(
+    elastic_payload:ElasticPayload
+):
+    start_time = T.time()
+    async with rwlock2.reader_lock:
+        current_peers = len(ph.peers)
+
+    if current_peers >= elastic_payload.rf:
+        response_time = T.time()- start_time
+        return JSONResponse(content=jsonable_encoder({
+            "pool_size":current_peers,
+            "response_time":response_time
+        }))
+    
+
+    diff = elastic_payload.rf - current_peers
+
+    failed = 0
+    tasks= []
+    deployed_peer_info = []
+    for task_index in range(diff):
+        selected_node = 0
+        peer_index = task_index + current_peers
+        current_container_id    = "mictlanx-peer-{}".format(peer_index)
+        port = PEER_BASE_PORT+peer_index
+        deployed_peer_info.append((current_container_id,port))
+        task = deploy_peer(
+            container_id=current_container_id,
+            port=port,
+            disk=elastic_payload.disk,
+            memory= elastic_payload.memory,
+            selected_node=selected_node,
+            workers= elastic_payload.workers
+        )
+        tasks.append(task)
+    
+    
+    async with rwlock2.writer_lock:
+        deployed_peer_info += list(ph.get_tupled_peers())
+    responses:List[Tuple[str,int, Result[SummonContainerResponse, Exception]]]  = await asyncio.gather(*tasks)
+    # print("RESPONSES_LIST", responses)
+    
+    for (current_container_id, current_container_port, summon_result) in responses:
+        # _start_time = T.time()
+        if summon_result.is_err:
+            failed+=1
+            log.error({
+                "detail":str(summon_result.unwrap_err())
+            })
+        else:
+            response = summon_result.unwrap()
+            async with rwlock2.writer_lock:
+                peer = Peer(
+                        peer_id=current_container_id,
+                        ip_addr=current_container_id,
+                        port=current_container_port,
+                        protocol=elastic_payload.protocol
+                )
+                for (other_peer_id, other_peer_port) in deployed_peer_info:
+                    if not current_container_id == other_peer_id:
+                        op_start_time = T.time()
+                        added_peer_result = peer.add_peer(
+                            id=other_peer_id,
+                            disk=elastic_payload.disk,
+                            memory= elastic_payload.memory,
+                            ip_addr= other_peer_id,
+                            port=other_peer_port,
+                            weight=1
+                        )
+                        rt = T.time() - op_start_time
+                        log.info({
+                            "event":"ADDED.OTHER.PEER",
+                            "peer_id":peer.peer_id,
+                            "added_peer_id":other_peer_id,
+                            "added_peer_port":other_peer_port, 
+                            "response_time":rt
+                        })
+                res = ph.add_peer(peer=peer)
+                # print("FINISHED", peer,res)
+    response_time = T.time()- start_time
+    log.info({
+        "event":"ELASTIC",
+        "pool_size":current_peers+(diff-failed),
+        "failed":failed,
+        "response_time":response_time
+    })
+    return JSONResponse(
+        content=jsonable_encoder({
+            "pool_size":current_peers+(diff-failed),
+            "response_time":response_time
+        })
+    )
+
+
+@app.post("/api/v4/replication")
+async def replication(replication_event:ReplicationEvent):
+    global replicator_queue
+    global log
+    try:
+        start_time = T.time()
+        await replicator_queue.put(item= replication_event)
+        response_time = T.time() - start_time
+        return JSONResponse(
+            content=jsonable_encoder(
+                {
+                    "replication_event_id":replication_event.id,
+                    "response_time":response_time
+                }
+            )
+        )
+    except Exception as e:
+        log.error({
+            "msg":str(e)
+        })
+        raise e
 
 @app.get("/api/v4/peers/stats")
 async def get_peers_stats(
@@ -456,9 +884,19 @@ async def get_metadata(
             peers = ph.peers
             max_peers = len(ph.peers)
 
+        log.debug({
+            "event":"GET.METADATA",
+            "bucket_id":bucket_id,
+            "key":key,
+            "peer_id":peer_id,
+        })
         if not peer_id is None:
             peer = ph.get_peer(peer_id=peer_id)
             if peer.is_none:
+                log.error({
+                    "msg":"{} not found".format(peer_id),
+                    "code":"404"
+                })
                 raise HTTPException(detail="{} not found".format(peer_id),status_code=404)
             else:
                 peers = [peer.unwrap()]
@@ -702,7 +1140,7 @@ async def delete_data_by_ball_id(
 
     global replicas_map
     async with rwlock2.reader_lock:
-        peers = ph.peers
+        peers = ph.peers.copy()
     headers = {}
     combined_key = ""
     _start_time = T.time()
@@ -749,14 +1187,13 @@ async def delete_data_by_ball_id(
             # raise HTTPException(status_code=404, detail="{}@{} not found".format(bucket_id,ball_id))
         
         async with rwlock.writer_lock:
-            deleted_replicas = 0 
             if combined_key in replicas_map:
                 deleted_replicas = replicas_map.pop(combined_key)
             log.info({
                 "event":"DELETED.REPLICA.BY.BALL_ID",
                 "bucket_id":_bucket_id,
                 "ball_id":_ball_id,
-                "deleted_replicas": list(deleted_replicas),
+                "deleted_replicas": len(deleted_replicas),
                 "response_time":T.time() - _start_time,
             })
         return JSONResponse(content=jsonable_encoder(default_del_by_ball_id_response))
@@ -816,25 +1253,68 @@ async def disable(bucket_id:str, key:str,):
         
 
 
-async def fx(peer:PeerPayload):
+async def fx(peer_payload:PeerPayload)->Result[str,Exception]:
     async with rwlock2.writer_lock:
-        status = ph.add_peer(peer.to_v4peer())
-        log.debug({
-            "event":"PEER.ADDED",
-            "peer_id":peer.peer_id,
-            "protocol":peer.protocol,
-            "hostname":peer.hostname,
-            "port":peer.port,
-            "status":status
-        })
+        try:
+            status = ph.add_peer(peer_payload.to_v4peer())
+            log.debug({
+                "event":"PEER.ADDED",
+                "peer_id":peer_payload.peer_id,
+                "protocol":peer_payload.protocol,
+                "hostname":peer_payload.hostname,
+                "port":peer_payload.port,
+                "status":status
+            })
+            return Ok(peer_payload.peer_id)
+        except R.exceptions.HTTPError as e:
+            detail = str(e.response.content.decode("utf-8") )
+            # e.response.reason
+            status_code = e.response.status_code
+            log.error({
+                "detail":detail,
+                "status_code":status_code,
+                "reason":e.response.reason,
+            })
+            return Err(e)
+            # raise HTTPException(status_code=status_code, detail=detail  )
+        except R.exceptions.ConnectionError as e:
+            # detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
+            log.error({
+                "detail":detail,
+                "status_code":500
+            })
+            return Err(e)
+            # raise HTTPException(status_code=500, detail=detail  )
+
         # print(ph.peers)
 
+@app.post("/api/v4/xpeers")
+async def add_peers(peers:List[PeerPayload]):
+    try:
+        start_time = T.time()
+        peers_ids = list(map(lambda p: p.peer_id, peers))
+        tasks = [ fx(peer_payload=p) for p in peers]
+        res = list(filter(lambda x: len(x)>0,map(lambda r: r.unwrap_or(""),await asyncio.gather(*tasks))))
+            # fx(peer_payload=peer)
+        log.info({
+            "event":"PEERS.ADDED",
+            "added_peers":res,
+            "response_time": T.time() - start_time
+        })
+        return Response(content=None, status_code=204)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail="ADD.PEERS.FAILED",
+
+        )
+    
 @app.post("/api/v4/peers")
 async def add_peer(peer:PeerPayload):
     try:
         start_time = T.time()
         asyncio.gather(
-            fx(peer=peer)
+            fx(peer_payload=peer)
         )
         log.info({
             "event":"PEER.ADDED",
@@ -859,6 +1339,7 @@ async def add_peer(peer:PeerPayload):
             "status_code":500
         })
         raise HTTPException(status_code=500, detail=detail  )
+
 
 @app.delete("/api/v4/peers/{peer_id}")
 async def remove_peer(peer_id:str):
@@ -1225,6 +1706,7 @@ async def get_size_by_key(bucket_id:str,key:str):
         return JSONResponse(content = jsonable_encoder(responses))
     except Exception as e:
         raise HTTPException(status_code = 500, detail="Uknown error: {}@{}".format(bucket_id,key))
+
 
 if __name__ =="__main__":
     uvicorn.run(

@@ -14,6 +14,7 @@ fastapi = "^0.110.2"
 uvicorn = "^0.29.0"
 python-multipart = "^0.0.9"
 aiorwlock = "^1.4.0"
+mictlanx = "^0.0.144"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -21,5 +21,6 @@ ENV MICTLANX_ROUTER_HOST=0.0.0.0
 # 
 # CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "60666"]
 # CMD ["python3","./mictlanxrouter/server.py"]
-# CMD ["uvicorn", "mictlanxrouter.server:app" ,"--host",${MICTLANX_ROUTER_HOST},"--port",${MICTLANX_ROUTER_PORT}]
+# CMD ["sleep","infinity"]
+# CMD ["uvicorn", "mictlanxrouter.server:app","--host",$MICTLANX_ROUTER_HOST,"--port",$MICTLANX_ROUTER_PORT]
 

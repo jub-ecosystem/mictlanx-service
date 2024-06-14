@@ -34,7 +34,10 @@ class PeerHealer:
         # self.total_gets_counter = 0
         # self.total_puts_counter = 0
 
-    # def next_peer(self):
+    def get_tupled_peers(self):
+        for peer in self.peers:
+            yield (peer.peer_id,peer.port)
+
     def total_counter_by_key(self,key:str,operation:Literal["PUT","GET"]):
         x = self.counter_map.setdefault(key,{})
         total= 0
@@ -87,10 +90,7 @@ class PeerHealer:
         self.peers  = list(filter(lambda peer: peer.peer_id != peer_id, self.peers))
         return n > len(self.peers)
 
-    # def update_used_capacity(self,peer_id:str,size:int=0):
-    #     stats = self.get_stats().get(peer_id,None)
-    #     if stats:
-    #         stats.used_disk+= size
+   
 
     def get_stats(self):
         return self.__peer_stats
@@ -110,11 +110,11 @@ class PeerHealer:
                 get_ufs_response = peer.get_ufs()
                 # print(peer.peer_id  ,get_ufs_response,peer.base_url())
                 if get_ufs_response.is_ok:
-                    response = get_ufs_response.unwrap()
+                    get_uf_result = get_ufs_response.unwrap()
                     peer_stats = self.__peer_stats.get(peer.peer_id,PeerStats(peer_id=peer.peer_id))
 
-                    peer_stats.total_disk = response.total_disk
-                    peer_stats.used_disk  = response.used_disk
+                    peer_stats.total_disk = get_uf_result.total_disk
+                    peer_stats.used_disk  = get_uf_result.used_disk
                     self.__peer_stats.setdefault(peer.peer_id,peer_stats)
                     counter +=1
                     self.__log.debug("Peer {} is  available".format(peer.peer_id))
