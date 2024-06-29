@@ -6,12 +6,15 @@ WORKDIR /app
 
 # 
 COPY ./requirements.txt /app/requirements.txt
-
-# 
 RUN pip install -r /app/requirements.txt
 #
 COPY ./pyproject.toml /app
 COPY ./mictlanxrouter /app/mictlanxrouter
+COPY ./mictlanx.tar.gz /app/x.tar.gz
+
+RUN pip install /app/x.tar.gz
+
+
 ENV MICTLANX_ROUTER_PORT=60666
 ENV MICTLANX_ROUTER_HOST=0.0.0.0
 

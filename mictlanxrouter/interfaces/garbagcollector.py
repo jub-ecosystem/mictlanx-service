@@ -6,14 +6,14 @@ from typing import List,Dict,Any,Tuple
 import time as T
 import humanfriendly as HF
 from mictlanx.v4.interfaces.index import Peer,PeerStats
-from mictlanxrouter.interfaces.healer import PeerHealer
+from mictlanxrouter.peer_manager.healer import StoragePeerManager
 import httpx as R
 
 class MictlanXFMGarbageCollector:
     """
         This class represents the daemon thread that executes every <hearbeat> seconds.
     """
-    def __init__(self,ph:PeerHealer,api_version:str=4,show_logs:bool=False) -> None:
+    def __init__(self,ph:StoragePeerManager,api_version:str=4,show_logs:bool=False) -> None:
         # Thread.__init__(self,name=name,daemon=daemon)
         self.is_running = True
         # self.heartbeat = HF.parse_timespan(heartbeat)
@@ -24,7 +24,7 @@ class MictlanXFMGarbageCollector:
             when="h"
         )
         self.api_version = api_version
-        self.ph:PeerHealer = ph
+        self.ph:StoragePeerManager = ph
     async def run(self):
         responses:List[Tuple[Peer, Dict[str,Any]]] = []
         # print("CURRENT_PEERS",self.ph.peers)

@@ -1,11 +1,9 @@
 fastapi==0.103.1
-option==2.1.0
 pydantic==2.4.0
 pymongo==4.5.0
 PyYAML==6.0.1
 uvicorn==0.23.2
 
-durations==0.3.3
 ipaddress==1.0.23
 nanoid==2.0.0
 option==2.1.0
@@ -21,5 +19,5 @@ virtualenv==20.25.0
 python-multipart==0.0.9
 aiorwlock==1.4.0
 --extra-index-url https://test.pypi.org/simple/
-mictlanx==0.0.148
+mictlanx==0.0.156
 xolo==0.0.7

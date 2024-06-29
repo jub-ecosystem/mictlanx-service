@@ -2,7 +2,7 @@
 import unittest as UT
 import asyncio
 from mictlanxrouter.replication import ReplicaManager
-from mictlanxrouter.interfaces.healer import PeerHealer
+from mictlanxrouter.peer_manager.healer import StoragePeerManager
 from mictlanx.v4.interfaces.index import Peer,PeerStats
 from queue import Queue
 
@@ -11,31 +11,36 @@ class MictlanXReplication(UT.TestCase):
         q = Queue()
         peers = [
             Peer(
-                peer_id="p1",
-                ip_addr="p1",
-                port=1,
+                peer_id="mictlanx-peer-0",
+                ip_addr="localhost",
+                port=25000,
                 protocol="http"
             ),
             Peer(
-                peer_id="p2",
-                ip_addr="p2",
-                port=2,
+                peer_id="mictlanx-peer-1",
+                ip_addr="localhost",
+                port=25001,
                 protocol="http"
             ),
             Peer(
-                peer_id="p3",
-                ip_addr="p3",
-                port=3,
+                peer_id="mictlanx-peer-2",
+                ip_addr="localhost",
+                port=25002,
                 protocol="http"
             )
         ]
-        rm = ReplicaManager(ph = PeerHealer(q = q, peers=peers))
-        res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=["p1"])
-        print(res)
-        
-        rm.remove_replicas(bucket_id="b1",key="k1", to_remove_replicas=["p1"])
-        res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=["p1","p2"])
-        print(res)
+        rm = ReplicaManager(ph = StoragePeerManager(q = q, peers=peers))
+        # res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=[])
+        # res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=[])
+        # apeers = rm.get_available_peers(bucket_id="b1",key = "k1")
+        # print(rm.get_replicated_peers(bucket_id="b1",key="k1"))
+        # res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=["p1"])
+        # print(res)
+        # # rm.remove_replicas(bucket_id="b1",key="k1", to_remove_replicas=["p1"])
+        # res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=["p1","p2"])
+        # print(res)
+        # res = rm.create_replicas(bucket_id="b1", key="k1", selected_replicas=["p1","p2","p3","p4"])
+        # print(res)
 
 
 

@@ -6,17 +6,18 @@ authors = ["Ignacio Castillo <ignacio.bcastillo@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.8,<=3.10"
 option = "^2.1.0"
 nanoid = "^2.0.0"
 pydantic = "^2.7.1"
-fastapi = "^0.110.2"
-uvicorn = "^0.29.0"
+fastapi = "^0.111.0"
 python-multipart = "^0.0.9"
 aiorwlock = "^1.4.0"
-mictlanx = "^0.0.144"
+numpy =">=1.21,<=1.26"
 
 
+uvicorn = "^0.30.1"
+mictlanx = {path = "mictlanx.tar.gz"}
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
 more-itertools = "^10.2.0"

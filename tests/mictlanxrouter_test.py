@@ -1,5 +1,4 @@
 import unittest as UT
-import asyncio
 
 class MictlanXRouter(UT.TestCase):
     pass

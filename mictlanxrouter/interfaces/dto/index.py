@@ -6,12 +6,13 @@ from mictlanx.v4.interfaces.index import Peer as PeerV4
 from pydantic import BaseModel
 
 
-class ElasticPayload(BaseModel):
+class PeerElasticPayload(BaseModel):
     rf:int
     memory:Optional[int] = 4000000000
     disk:Optional[int]= 40000000000
     workers:Optional[int] = 2
     protocol:Optional[str] = "http"
+    elastic:Optional[str] = "false"
     strategy:Optional[str] = "ACTIVE"
 @dataclass
 class Peer:

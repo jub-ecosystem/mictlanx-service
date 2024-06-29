@@ -1,4 +1,3 @@
-version: "3"
 services:
   mictlanx-router-0:
     image: nachocode/mictlanx:router
@@ -35,8 +34,55 @@ services:
     restart: unless-stopped
 
 
+  mictlanx-summoner-0:
+    image: nachocode/mictlanx:summoner
+    container_name: mictlanx-summoner-0
+    hostname: mictlanx-summoner-0
+    privileged: true
+    ports:
+      - 15000:15000
+    environment:
+      - USER_ID=1001
+      - GROUP_ID=1002
+      - DOCKER_GID=1001
+      - BASE_PATH=${BASE_PATH-/app/mictlanx}
+      - BIN_NAME=summoner
+      - NODE_ID=mictlanx-summoner-0
+      - NODE_PORT=15000
+      - IP_ADDRESS=mictlanx-summoner-0
+      - SERVER_IP_ADDR=0.0.0.0
+      - LOG_PATH=${BASE_PATH-/app/mictlanx}/log
+      - LOCAL_PATH=${BASE_PATH-/app/mictlanx}/local
+      - DATA_PATH=${BASE_PATH-/app/mictlanx}/data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - mictlanx-summoner-0:/mictlanx
+    networks:
+      - mictlanx
+
+  tezcanalyticx-0:
+    image: nachocode/tezcanalyticx:api
+    container_name:  tezcanalyticx-0
+    environment:
+    - LOGGER_PATH=/log
+    - IP_ADDR=0.0.0.0
+    - PORT=45000
+    - RELOAD=1
+    - PERIOD_WINDOW_TIME_SEC=30s
+    - LOGGER_INTERVAL=24
+    - LOGGER_WHEN=h
+    command: uvicorn tezcanalyticx.server:app --host ${TEZCANALYTICX_IP_ADDR-0.0.0.0} --port ${TEZCANALYTICX_PORT-45000}
+    ports:
+    - ${PORT-45000}:${PORT-45000}
+    volumes:
+    - tezcanalyticx-0:/log
+    networks:
+    - mictlanx
+    restart: unless-stopped
 volumes:
   mictlanx-router-0_logs:
+  tezcanalyticx-0:
+  mictlanx-summoner-0:
 
 networks:
   mictlanx:
