@@ -17,7 +17,7 @@ numpy =">=1.21,<=1.26"
 
 
 uvicorn = "^0.30.1"
-mictlanx = {path = "mictlanx.tar.gz"}
+mictlanx = "0.0.157"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
 more-itertools = "^10.2.0"

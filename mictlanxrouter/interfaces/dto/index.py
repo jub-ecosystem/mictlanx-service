@@ -7,15 +7,17 @@ from pydantic import BaseModel
 
 
 class PeerElasticPayload(BaseModel):
-    rf:int
-    memory:Optional[int] = 4000000000
-    disk:Optional[int]= 40000000000
-    workers:Optional[int] = 2
+    rf      :Optional[int] = 1
+    cpu     :Optional[int] = 1
+    memory  :Optional[int] = 4000000000
+    disk    :Optional[int] = 20000000000
+    workers :Optional[int] = 2
     protocol:Optional[str] = "http"
-    elastic:Optional[str] = "false"
+    elastic :Optional[str] = "false"
     strategy:Optional[str] = "ACTIVE"
+
 @dataclass
-class Peer:
+class PeerPayload:
     protocol:str
     peer_id:str
     hostname:str

@@ -13,6 +13,7 @@ class Metadata:
     producer_id:str
     content_type:str
     is_disabled:bool
+    replication_factor:int = 1 
 
 
 
