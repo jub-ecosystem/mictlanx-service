@@ -10,9 +10,9 @@ RUN pip install -r /app/requirements.txt
 #
 COPY ./pyproject.toml /app
 COPY ./mictlanxrouter /app/mictlanxrouter
-COPY ./mictlanx.tar.gz /app/x.tar.gz
+# COPY ./mictlanx.tar.gz /app/x.tar.gz
 
-RUN pip install /app/x.tar.gz
+# RUN pip install /app/x.tar.gz
 
 
 ENV MICTLANX_ROUTER_PORT=60666

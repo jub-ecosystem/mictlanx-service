@@ -2,7 +2,7 @@ from mictlanx.logger.log import Log
 import asyncio
 import humanfriendly as HF
 import time as T
-from typing import List
+from typing import List,Dict
 from mictlanxrouter.peer_manager import StoragePeerManager
 from mictlanxrouter.replication import ReplicaManager
 import mictlanx.v4.interfaces as InterfaceX
@@ -35,23 +35,60 @@ async def run_rm(
     rm:ReplicaManager,
     queue_max_idle_time:str = "30s",
     queue_tick_timeout:str = "5s",
-    batch_size:int = 100
+    batch_size:int = 1000
 ):
     last_time = T.time()
     _queue_max_idle_time = HF.parse_timespan(queue_max_idle_time)
     _queue_tick_timeout  = HF.parse_timespan(queue_tick_timeout)
     iteration = 0
     latest_n_balls = -1
+    map_n_balls:Dict[str,int] = {}
+    peers              = await rm.spm.get_available_peers()
+    local_n_balls_map = dict([ (p.peer_id,p.get_balls_len().unwrap_or(0)) for p in peers])
     while True:
+        elapsed = T.time() - last_time
         try:
-            event = rm.q.get_nowait()
-            peers = await rm.spm.get_available_peers()
-            tasks = [x async for x in get_stats_from_peers(peers=peers, batch_size=batch_size, iteration=iteration)]
-            stats = map(lambda x: x.unwrap(),filter(lambda x: x.is_ok,await asyncio.gather(*tasks)))
-            xs = {}
+            max_n_balls = ((iteration +1)*batch_size)
+            peers              = await rm.spm.get_available_peers()
+            event              = rm.q.get_nowait()
+            current_total_balls_map:Dict[str,int]      = dict([ (p.peer_id,p.get_balls_len().unwrap_or(0)) for p in peers])
+            filtered_peers_ids:List[str] = []
+            for p in peers:
+                current_n_balls = current_total_balls_map.setdefault(p.peer_id, 0)
+                local_n_balls   = local_n_balls_map.setdefault(p.peer_id,0)
+                if current_n_balls !=  local_n_balls or max_n_balls < current_n_balls:
+                    local_n_balls_map[p.peer_id]=  max_n_balls
+                    filtered_peers_ids.append(p.peer_id)
+                
+            
+            filtered_peers     = filter(lambda x: x.peer_id in filtered_peers_ids, peers)
+            log.debug({
+                "event":"RUN.RM",
+                "peers_n_balls":current_total_balls_map,
+                "filtered_peers":filtered_peers_ids
+                
+            })
+            tasks   = [x async for x in get_stats_from_peers(peers=filtered_peers, batch_size=batch_size, iteration=iteration)]
+            stats   = map(lambda x: x.unwrap(),filter(lambda x: x.is_ok,await asyncio.gather(*tasks)))
+            xs      = {}
             n_balls = 0
+            
             for stat in stats:
-                n_balls += len(stat.balls)
+                current_n_balls = len(stat.balls)
+                n_balls += current_n_balls
+                if not stat.peer_id in map_n_balls:
+                    map_n_balls[stat.peer_id] = 0
+
+                if current_n_balls == map_n_balls.get(stat.peer_id,0) and event != 0:
+                    log.debug({
+                        "peer_id":stat.peer_id,
+                        "event":"REPLICATION.SKIPPED",
+                        "n_balls":current_n_balls
+                    })
+                    continue
+                else:
+                    map_n_balls[stat.peer_id] = current_n_balls
+
                 ys = dict([ ("{}.{}.{}".format(stat.peer_id,b.bucket_id,b.key),0) for b in stat.balls])
                 await rm.extend_access_map(access_map=ys)
                 for b in stat.balls:
@@ -90,7 +127,6 @@ async def run_rm(
             iteration += 1
 
         except asyncio.QueueEmpty as e:
-            elapsed = T.time() - last_time
             log.warn({
                 "event":"RM.QUEUE.EMPTY",
                 "elapsed":HF.format_timespan(elapsed)

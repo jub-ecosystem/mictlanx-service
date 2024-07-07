@@ -21,12 +21,12 @@ log                          = Log(
 
 def run_async_healer(
         ph:StoragePeerManager,
-        heartbeat:str="10s",
+        # heartbeat:str="10s",
         max_idle_time:str ="10s",
         queue_tick_timeout:str="5s",
 ):
     async def __run_async_healer():
-        _heartbeat = HF.parse_timespan(heartbeat)
+        # _heartbeat = HF.parse_timespan(heartbeat)
         last_time = T.time()
         _queue_tick_timeout = HF.parse_timespan(queue_tick_timeout)
         _max_idle_time = HF.parse_timespan(max_idle_time)
@@ -58,7 +58,8 @@ def run_async_healer(
                 elapsed_time = T.time() - last_time
                 log.warn({
                     "event":"SPM.QUEUE.EMPTY",
-                    "elapsed_time":HF.format_timespan(elapsed_time)
+                    "elapsed_time":HF.format_timespan(elapsed_time),
+                    "max_idle_time": max_idle_time
                 })
                 if elapsed_time >= _max_idle_time:
                     last_time = T.time()

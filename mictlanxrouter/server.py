@@ -26,17 +26,12 @@ from mictlanxrouter.interfaces.dto.index import PeerPayload,DeletedByBallIdRespo
 from mictlanxrouter.peer_manager.healer import StoragePeerManager
 from mictlanxrouter.interfaces.dto.index import PeerElasticPayload
 # 
-from mictlanx.v4.interfaces.responses import GetMetadataResponse,PutMetadataResponse,PeerPutMetadataResponse
+from mictlanx.v4.interfaces.responses import PutMetadataResponse,PeerPutMetadataResponse
 from mictlanx.logger.log import Log
-from mictlanx.v4.interfaces.index import Peer
-from mictlanx.interfaces.responses import SummonContainerResponse
 from mictlanx.logger.tezcanalyticx.tezcanalyticx import TezcanalyticXHttpHandler
-from mictlanx.interfaces.payloads import SummonContainerPayload,ExposedPort
 from mictlanx.v4.summoner.summoner import  Summoner
-from mictlanx.interfaces.payloads import MountX
 from mictlanx.utils.index import Utils
 from mictlanxrouter._async import run_async_healer,run_rm
-# from mictlanxrouter._async import 
 from mictlanxrouter.tasksx import TaskX,DefaultTaskManager
 
 TEZCANALYTICX_ENABLED       = bool(int(os.environ.get("TEZCANALYTICX_ENABLE","0")))
@@ -51,7 +46,7 @@ LOG_PATH                    = os.environ.get("LOG_PATH","/log")
 # 
 MICTLANX_ROUTER_HOST                         = os.environ.get("MICTLANX_ROUTER_HOST","localhost")
 MICTLANX_ROUTER_PORT                         = int(os.environ.get("MICTLANX_ROUTER_PORT","60666"))
-MICTLANX_ROUTER_RELOAD                       = bool(int(os.environ.get("MICTLANX_ROUTER_RELOAD","1")))
+# MICTLANX_ROUTER_RELOAD                       = bool(int(os.environ.get("MICTLANX_ROUTER_RELOAD","1")))
 MICTLANX_ROUTER_MAX_WORKERS                  = int(os.environ.get("MAX_WORKERS","4"))
 MICTLANX_ROUTER_LB_ALGORITHM                 = os.environ.get("MICTLANX_ROUTER_LB_ALGORITHM","ROUND_ROBIN") # ROUND_ROBIN
 MICTLANX_ROUTER_LOG_NAME                     = os.environ.get("MICTLANX_ROUTER_LOG_NAME","mictlanx-router-0")
@@ -59,8 +54,8 @@ MICTLANX_ROUTER_LOG_INTERVAL                 = int(os.environ.get("MICTLANX_ROUT
 MICTLANX_ROUTER_LOG_WHEN                     = os.environ.get("MICTLANX_ROUTER_LOG_WHEN","h")
 MICTLANX_ROUTER_LOG_SHOW                     = bool(int(os.environ.get("MICTLANX_ROUTER_LOG_SHOW","1")))
 MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE     = int(os.environ.get("MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE","100"))
-MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT        = os.environ.get("MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT","5m")
-MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT     = os.environ.get("MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT","30s")
+# MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT        = os.environ.get("MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT","5m")
+# MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT     = os.environ.get("MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT","30s")
 MICTLANX_ROUTER_SYNC_FAST                    = bool(int(os.environ.get("MICTLANX_ROUTER_SYNC_FAST","1")))
 MICTLANX_ROUTER_PEER_BASE_PORT               = int(os.environ.get("MICTLANX_PEER_BASE_PORT","25000"))
 MICTLANX_ROUTER_MAX_PEERS                    = int(os.environ.get("MICTLANX_ROUTERMAX_PEERS","10"))
@@ -75,19 +70,23 @@ MICTLANX_ROUTER_MAX_CONCURRENCY              = int(os.environ.get("MICTLANX_ROUT
 MICTLANX_ROUTER_MAX_PEERS_RF                 = int(os.environ.get("MICTLANX_ROUTER_MAX_PEERS_RF","5"))
 MICTLANX_ROUTER_NETWORK_ID                   = os.environ.get("MICTLANX_ROUTER_NETWORK_ID","mictlanx")
 MICTLANX_ROUTER_BASE_PROTOCOL                = os.environ.get("MICTLANX_ROUTER_BASE_PROTOCOL","http")
+
 # Storage peer manager
-MICTLANX_SPM_SHOW_LOGS                       = bool(int(os.environ.get("MICTLANX_SPM_SHOW_LOGS","0")))
+MICTLANX_SPM_SHOW_LOGS                       = bool(int(os.environ.get("MICTLANX_SPM_SHOW_LOGS","1")))
 MICTLANX_SPM_DEBUG                           = bool(int(os.environ.get("MICTLANX_SPM_DEBUG","1")))
 MICTLANX_SPM_MAX_TRIES                       = int(os.environ.get("MICTLANX_SPM_MAX_TRIES","10"))
-MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER          = os.environ.get("MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER","30s")
+MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER          = os.environ.get("MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER","10s")
 MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR        = os.environ.get("MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR",";")
 MICTLANX_SPM_PHYSICAL_NODES_INDEXES          = os.environ.get("MICTLANX_SPM_PHYSICAL_NODES_INDEXES","0;2;3;4;5").split(MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR)
-MICTLANX_SPM_MAX_IDLE_TIME                   = os.environ.get("MICTLANX_SPM_MAX_IDLE_TIME","60s")
-MICTLANX_SPM_QUEUE_TICK_TIMEOUT              = os.environ.get("MICTLANX_SPM_QUEUE_TICK_TIMEOUT","5s")
+MICTLANX_SPM_MAX_IDLE_TIME                   = os.environ.get("MICTLANX_SPM_MAX_IDLE_TIME","5s")
+MICTLANX_SPM_QUEUE_TICK_TIMEOUT              = os.environ.get("MICTLANX_SPM_QUEUE_TICK_TIMEOUT","2s")
+MICTLANX_SPM_PEER_CONFIG_PATH                = os.environ.get("MICTLANX_SPM_PEER_CONFIG_PATH","/home/nacho/Programming/Python/mictlanx-router/peers-dev.json")
+MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE = os.environ.get("MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE","5m")
+MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART   = os.environ.get("MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART","10s")
 # Replica manager
 MICTLANX_RM_ELASTIC             = bool(int(os.environ.get("MICTLANX_RM_ELASTIC","1")))
 MICTLANX_RM_SHOW_LOGS           = bool(int(os.environ.get("MICTLANX_RM_SHOW_LOGS","1")))
-MICTLANX_RM_QUEUE_TICK_TIMEOUT  = os.environ.get("MICTLANX_RM_QUEUE_TICK_TIMEOUT","5s")
+MICTLANX_RM_QUEUE_TICK_TIMEOUT  = os.environ.get("MICTLANX_RM_QUEUE_TICK_TIMEOUT","20s")
 MICTLANX_RM_QUEUE_MAX_IDLE_TIME = os.environ.get("MICTLANX_RM_QUEUE_MAX_IDLE_TIME","10s")
 # Client
 MICTLANX_PEERS_STR                = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:25000 mictlanx-peer-1:localhost:25001 mictlanx-peer-2:localhost:25002")
@@ -101,7 +100,10 @@ MICTLANX_SUMMONER_IP_ADDR     = os.environ.get("MICTLANX_SUMMONER_IP_ADDR","loca
 MICTLANX_SUMMONER_PORT        = int(os.environ.get("MICTLANX_SUMMONER_PORT","15000"))
 MICTLANX_SUMMONER_MODE        = os.environ.get("MICTLANX_SUMMONER_MODE","docker")
 MICTLANX_SUMMONER_SUBNET      = os.environ.get("MICTLANX_SUMMONER_SUBNET","10.0.0.0/25")
-# _____________________________________________________
+# ____________________________________________________    
+
+    
+    
 def signal_handler(sig, frame):
     global log
     log.warn('Shutting down gracefully...')
@@ -160,8 +162,11 @@ storage_peer_manager = StoragePeerManager(
     base_protocol= MICTLANX_ROUTER_BASE_PROTOCOL,
     debug = MICTLANX_SPM_DEBUG,
     max_timeout_to_recover=MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER,
+    max_recover_time_until_restart= MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART,
     max_tries= MICTLANX_SPM_MAX_TRIES,
     physical_nodes_indexes= MICTLANX_SPM_PHYSICAL_NODES_INDEXES,
+    peers_config_path=MICTLANX_SPM_PEER_CONFIG_PATH,
+    max_timeout_to_save_peer_config= MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE
 )
 rm_q = asyncio.Queue()
 replica_manager = ReplicaManager(
@@ -170,7 +175,6 @@ replica_manager = ReplicaManager(
     elastic= MICTLANX_RM_ELASTIC,
     show_logs=MICTLANX_RM_SHOW_LOGS
 )
-lb = LoadBalancer(algorithm=MICTLANX_ROUTER_LB_ALGORITHM, peer_healer=storage_peer_manager)
 
 # 
 
@@ -179,7 +183,7 @@ log.debug({
     "event":"MICTLANX_ROUTER_STARTED",
     "MICTLANX_ROUTER_HOST":MICTLANX_ROUTER_HOST,
     "MICTLANX_ROUTER_PORT":MICTLANX_ROUTER_PORT,
-    "MICTLANX_ROUTER_RELOAD":MICTLANX_ROUTER_RELOAD,
+    # "MICTLANX_ROUTER_RELOAD":MICTLANX_ROUTER_RELOAD,
     "TEZCANALYTICX_ENABLED": TEZCANALYTICX_ENABLED,
     "TEZCANALYTICX_FLUSH_TIMEOUT": TEZCANALYTICX_FLUSH_TIMEOUT,
     "TEZCANALYTICX_BUFFER_SIZE": TEZCANALYTICX_BUFFER_SIZE,
@@ -194,8 +198,8 @@ log.debug({
     "MICTLANX_ROUTER_LOG_WHEN": MICTLANX_ROUTER_LOG_WHEN,
     "MICTLANX_ROUTER_LOG_SHOW": MICTLANX_ROUTER_LOG_SHOW,
     "MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE": MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE,
-    "MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT": MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT,
-    "MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT": MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT,
+    # "MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT": MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT,
+    # "MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT": MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT,
     "MICTLANX_ROUTER_SYNC_FAST": MICTLANX_ROUTER_SYNC_FAST,
     "MICTLANX_ROUTER_LB_ALGORITHM": MICTLANX_ROUTER_LB_ALGORITHM,
     "MICTLANX_ROUTER_PEER_BASE_PORT": MICTLANX_ROUTER_PEER_BASE_PORT,
@@ -222,7 +226,7 @@ async def lifespan(app:FastAPI):
     t1 = asyncio.create_task(
         run_async_healer(
             ph=storage_peer_manager,
-            heartbeat= MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT,
+            # heartbeat= MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT,
             queue_tick_timeout=MICTLANX_SPM_QUEUE_TICK_TIMEOUT,
             max_idle_time= MICTLANX_SPM_MAX_IDLE_TIME
         )
@@ -307,6 +311,14 @@ async def add_peers(peers:List[PeerPayload]):
             "response_time": T.time() - start_time
         })
         return Response(content=None, status_code=204)
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        return HTTPException(status_code=500, detail = str(e))
     except Exception as e:
         log.error({
             "event":"ADD.PEERS.FAILED",
@@ -331,6 +343,14 @@ async def add_peer(peer:PeerPayload):
             "response_time": T.time() - start_time
         })
         return Response(content=None, status_code=204)
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        raise HTTPException(status_code=e.status_code, detail = e.detail, headers=e.headers)
     except R.exceptions.HTTPError as e:
         detail      = str(e.response.content.decode("utf-8") )
         status_code = e.response.status_code
@@ -372,6 +392,14 @@ async def remove_peer(peer_id:str):
             "response_time":T.time() - start_time
         })
         return Response(content=None, status_code=204)
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        raise HTTPException(status_code=e.status_code, detail = e.detail, headers=e.headers)
     except R.exceptions.HTTPError as e:
         detail = str(e.response.content.decode("utf-8") )
         # e.response.reason
@@ -401,6 +429,14 @@ async def leave_peer(peer_id:str):
             "response_time":T.time() - start_time
         })
         return Response(content=None, status_code=204)
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        raise HTTPException(status_code=e.status_code, detail = e.detail, headers=e.headers)
     except R.exceptions.HTTPError as e:
         detail = str(e.response.content.decode("utf-8") )
         # e.response.reason
@@ -523,6 +559,14 @@ async def put_metadata(
             service_time=T.time()- start_time,
         )
         return JSONResponse(content=jsonable_encoder(put_metadata_response))
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        raise HTTPException(status_code=e.status_code, detail = e.detail, headers=e.headers)
     except R.exceptions.HTTPError as e:
         detail = str(e.response.content.decode("utf-8") )
         # e.response.reason
@@ -626,7 +670,7 @@ async def get_peers_stats(
         failed = 0 
         for peer in peers:
             try:
-                result = peer.get_stats(timeout=10)
+                result = peer.get_stats(timeout=10, start=start, end=end)
                 if result.is_ok:
                     stats_response = result.unwrap()
                     responses.append(stats_response.__dict__)
@@ -752,94 +796,7 @@ async def elastic(
             # "pool_size":available_peers_len+(diff-failed),
             # "response_time":response_time
     )
-    # available_peers = await storage_peer_manager.get_available_peers()
-    # available_peers_len   = len(available_peers)
 
-    # if available_peers_len >= elastic_payload.rf:
-    #     response_time = T.time()- start_time
-    #     return JSONResponse(content=jsonable_encoder({
-    #         "pool_size":available_peers_len,
-    #         "response_time":response_time
-    #     }))
-    
-    # diff = elastic_payload.rf - available_peers_len
-
-    # failed = 0
-    # tasks= []
-    # deployed_peer_info = []
-    # for task_index in range(diff):
-    #     selected_node        = 0
-    #     peer_index           = task_index + available_peers_len
-    #     current_container_id = "mictlanx-peer-{}".format(peer_index)
-    #     port                 = MICTLANX_ROUTER_PEER_BASE_PORT+peer_index
-    #     deployed_peer_info.append((current_container_id,port))
-    #     task = deploy_peer(
-    #         container_id=current_container_id,
-    #         port=port,
-    #         disk=elastic_payload.disk,
-    #         memory= elastic_payload.memory,
-    #         selected_node=selected_node,
-    #         workers= elastic_payload.workers,
-    #         elastic= elastic_payload.elastic
-    #     )
-    #     tasks.append(task)
-    
-    
-    # async with peer_healer_rwlock.writer_lock:
-    #     deployed_peer_info += list(await storage_peer_manager.get_tupled_peers())
-    # responses:List[Tuple[str,int, Result[SummonContainerResponse, Exception]]]  = await asyncio.gather(*tasks)
-    # # print("RESPONSES_LIST", responses)
-    
-    # for (current_container_id, current_container_port, summon_result) in responses:
-    #     # _start_time = T.time()
-    #     if summon_result.is_err:
-    #         failed+=1
-    #         log.error({
-    #             "detail":str(summon_result.unwrap_err())
-    #         })
-    #     else:
-    #         response = summon_result.unwrap()
-    #         async with peer_healer_rwlock.writer_lock:
-    #             peer = Peer(
-    #                     peer_id=current_container_id,
-    #                     ip_addr=current_container_id,
-    #                     port=current_container_port,
-    #                     protocol=elastic_payload.protocol
-    #             )
-    #             for (other_peer_id, other_peer_port) in deployed_peer_info:
-    #                 if not current_container_id == other_peer_id:
-    #                     op_start_time = T.time()
-    #                     added_peer_result = peer.add_peer(
-    #                         id=other_peer_id,
-    #                         disk=elastic_payload.disk,
-    #                         memory= elastic_payload.memory,
-    #                         ip_addr= other_peer_id,
-    #                         port=other_peer_port,
-    #                         weight=1
-    #                     )
-    #                     rt = T.time() - op_start_time
-    #                     log.info({
-    #                         "event":"ADDED.OTHER.PEER",
-    #                         "peer_id":peer.peer_id,
-    #                         "added_peer_id":other_peer_id,
-    #                         "added_peer_port":other_peer_port, 
-    #                         "response_time":rt
-    #                     })
-    #             res = await storage_peer_manager.add_peer(peer=peer)
-    #             # print("FINISHED", peer,res)
-    # response_time = T.time()- start_time
-    # log.info({
-    #     "event":"ELASTIC",
-    #     "pool_size":available_peers_len+(diff-failed),
-    #     "failed":failed,
-    #     "response_time":response_time
-    # })
-    # return JSONResponse(
-    #     content=jsonable_encoder({
-    #         "pool_size":available_peers_len+(diff-failed),
-    #         "response_time":response_time
-    #     })
-    # )
 
 
 @app.post("/api/v4/replication")
@@ -979,78 +936,8 @@ async def get_metadata(
     peer_id:Annotated[Union[str,None], Header()]=None,
     
 ):
-    # peers = ph.get_stats
     try:
         start_time = T.time()
-        # headers = {}
-        # fails = 0    
-        # # metadatas:List[GetMetadataResponse] = []
-        # max_last_updated_at=  -1
-        # most_recent_metadata = None
-
-        # replicas = await replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
-        # async with peer_healer_rwlock.reader_lock:
-        #     peers = storage_peer_manager.peers
-        #     max_peers = len(storage_peer_manager.peers)
-
-        #     if not peer_id is None:
-        #         peer = storage_peer_manager.get_peer_by_id(peer_id=peer_id)
-        #         if peer.is_none:
-        #             log.error({
-        #                 "msg":"{} not found".format(peer_id),
-        #                 "code":"404"
-        #             })
-        #             raise HTTPException(detail="{} not found".format(peer_id),status_code=404)
-        #         else:
-        #             peers = [peer.unwrap()]
-
-            
-
-        #     # print("SELECTED_PEEER ", peer)
-        #     if not consistency_model == "STRONG" and not consistency_model == "EVENTUAL" and peer_id == None:
-        #         # async with peer_healer_rwlock.reader_lock:
-        #         maybe_peer = await storage_peer_manager.next_peer(key=key,operation="GET")
-        #         if maybe_peer.is_none:
-        #             raise HTTPException(status_code=404, detail="No peers available. Contact me get more information about the elasticity plan.")
-                
-        #         _peer = maybe_peer.unwrap()
-        #         # if replicas_map.get()
-        #         peers = [_peer]
-        
-        # for peer in peers:
-        #     metadata_result = peer.get_metadata(bucket_id=bucket_id, key=key, headers=headers)
-        #     if metadata_result.is_err:
-        #         fails+=1
-        #     else:
-        #         metadata = metadata_result.unwrap()
-        #         if  consistency_model == "EVENTUAL":
-        #             most_recent_metadata = metadata
-        #             break
-        #             # return JSONResponse(content=jsonable_encoder(metadata) )
-        #         elif consistency_model == "STRONG":
-        #             current_updated_at  = int(metadata.metadata.tags.get("updated_at","-1"))
-        #             if max_last_updated_at <= -1 or max_last_updated_at < current_updated_at:
-        #                 max_last_updated_at = current_updated_at
-        #                 most_recent_metadata = metadata
-        #         else:
-        #             log.info({
-        #                 "event":"GET.METADATA.COMPLETED",
-        #                 "bucket_id":bucket_id,
-        #                 "key":key,
-        #                 "consistency_model":consistency_model,
-        #                 "peer_id":metadata.peer_id,
-        #                 "local_peer_id":metadata.local_peer_id,
-        #                 "hit": int(metadata.local_peer_id == metadata.peer_id),
-        #                 "size":metadata.metadata.size,
-        #                 "response_time":T.time()- start_time
-        #             })
-        #             return JSONResponse(content=jsonable_encoder(metadata) )
-        
-
-        # peer_ids = list(map(lambda x: x.peer_id, peers))
-        # if fails >= max_peers  or most_recent_metadata is None:
-        #     raise HTTPException(status_code=404, detail="{}@{} not found".format(bucket_id,key))
-        # else:
         maybe_peer = await replica_manager.access(bucket_id=bucket_id,key=key)
         if maybe_peer.is_none:
             detail = "No available peers"
@@ -1125,26 +1012,25 @@ async def get_data(
     bucket_id:str,
     key:str,
     content_type:str = "",
-    # consistency_model:Annotated[Union[str,None], Header()]="STRONG"  ,
     chunk_size:Annotated[Union[str,None], Header()]="10mb",
     peer_id:Annotated[Union[str,None], Header()]=None,
     local_peer_id:Annotated[Union[str,None], Header()]=None,
     filename:str = "",
     attachment:bool = False
-    # Annotated[Union[str,None],Header()]=None
 ):
     # peers = ph.get_stats
     try:
         start_time = T.time()
         
-        if not (peer_id =="" or peer_id == None):
+        peer_id_param_is_empty = peer_id =="" or peer_id == None
+        if not (peer_id_param_is_empty):
             maybe_peer = await storage_peer_manager.get_peer_by_id(peer_id=peer_id)
         else:
             maybe_peer = await replica_manager.access(bucket_id=bucket_id,key=key)
 
             
         if maybe_peer.is_none:
-            detail = "No available peer {}".format(peer_id)
+            detail = "No available peer{}".format( " " if peer_id_param_is_empty else " {}".format(peer_id))
             log.error({
                 "event":"GET.DATA.FAILED",
                 "bucket_id":bucket_id,
@@ -1152,6 +1038,7 @@ async def get_data(
                 "peer_id":peer_id,
                 "detail":detail,
             })
+            raise HTTPException(status_code=404, detail=detail)
         
         peer = maybe_peer.unwrap()
         headers = {}
@@ -1197,6 +1084,14 @@ async def get_data(
 
             # return JSONResponse(content=jsonable_encoder(most_recent_metadata) )
             
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        raise HTTPException(status_code=e.status_code, detail = e.detail, headers=e.headers)
     except R.exceptions.HTTPError as e:
         detail = str(e.response.content.decode("utf-8") )
         # e.response.reason
@@ -1216,14 +1111,14 @@ async def get_data(
             "status_code":500
         })
         raise HTTPException(status_code=500, detail=detail  )
-    except Exception as e:
-        detail = str(e)
-        log.error({
-            "event":"EXCEPTION",
-            "detail":detail,
-            "status_code":500
-        })
-        raise HTTPException(status_code=500, detail=detail  )
+    # except Exception as e:
+    #     detail = str(e)
+    #     log.error({
+    #         "event":"EXCEPTION",
+    #         "detail":detail,
+    #         "status_code":500
+    #     })
+    #     raise HTTPException(status_code=500, detail=detail  )
         
 
 
@@ -1577,6 +1472,13 @@ async def put_data_chunked(
 
         return JSONResponse(content=jsonable_encoder(response))
 
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        return HTTPException(status_code=500, detail = str(e))
     except R.exceptions.HTTPError as e:
         detail = str(e.response.content.decode("utf-8") )
         # e.response.reason
@@ -1629,7 +1531,7 @@ async def get_size_by_key(bucket_id:str,key:str):
 
 
 @app.get("/api/v4/accessmap")
-async def get_access_map(start:int=0, end:int =0):
+async def get_access_map(start:int=0, end:int =0,no_access:bool = False):
     try:
         x = await replica_manager.get_access_replica_map()
         if end <=0:
@@ -1641,8 +1543,12 @@ async def get_access_map(start:int=0, end:int =0):
             _start=0
         else :
             _start = start
+        
+
+        filtered_x = filter(lambda b: b[1] > 0 or no_access ,x.items())
+        xs = dict(list(  filtered_x   )[_start:_end] )
         return JSONResponse(
-            content=jsonable_encoder( dict(list(  x.items()   )[_start:_end] ) )
+            content=jsonable_encoder( xs  )
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1661,7 +1567,7 @@ async def get_peers():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 @app.get("/api/v4/peers/{bucket_id}/{key}")
-async def get_replica_map(bucket_id:str, key:str):
+async def get_replica_map_by_ball(bucket_id:str, key:str):
     try:
         available = await replica_manager.get_available_peers_ids(bucket_id=bucket_id,key=key,size=0)
         current_replicas = await replica_manager.get_current_replicas_ids(bucket_id=bucket_id,key=key)
@@ -1695,6 +1601,16 @@ async def get_tasks(start:int =0, end:int = 0):
             content=jsonable_encoder({
                 "tasks":tasks[_start:_end]
             })
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))   
+
+@app.get("/api/v4/replicamap")
+async def get_replica_map(start:int =0, end:int = 0):
+    try:
+        replica_map = await replica_manager.get_replica_map()
+        return JSONResponse(
+            content=jsonable_encoder(replica_map)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))   

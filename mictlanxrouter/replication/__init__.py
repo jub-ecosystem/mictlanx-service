@@ -147,6 +147,9 @@ class ReplicaManager(object):
         self.access_replica_map:Dict[str,int]= {}
 
     # async def extend
+    async def get_replica_map(self):
+        async with  self.lock.reader_lock:
+            return self.replica_map
     async def get_access_replica_map(self):
         async with self.get_lock.reader_lock:
             return self.access_replica_map
@@ -159,6 +162,12 @@ class ReplicaManager(object):
 
     async def access(self,bucket_id:str, key:str)->Option[InterfaceX.Peer]:
         min_access_replicas = await self.get_min_accessed_replica(bucket_id=bucket_id,key=key)
+        self.__log.debug({
+            "event":"ACCESS.INNER",
+            "bucket_id":bucket_id,
+            "key":key,
+            "min_access_replicas":min_access_replicas.map(lambda x : x.peer_id).unwrap_or("")
+        })
         if min_access_replicas.is_none:
             return NONE
         peer = min_access_replicas.unwrap()
