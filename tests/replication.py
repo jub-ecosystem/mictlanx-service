@@ -2,10 +2,11 @@
 import unittest as UT
 import time as T
 import asyncio
-from mictlanxrouter.replication import ReplicaManager
+from mictlanxrouter.replication import ReplicaManager,Pagination,ReplicaManagerParams
 from mictlanxrouter.peer_manager.healer import StoragePeerManager
 from mictlanx.v4.interfaces.index import Peer,PeerStats
 from mictlanx.v4.summoner.summoner import Summoner
+# from mictlanxrouter._async.replica_management import ReplicaManagerParams
 import humanfriendly as HF
 from queue import Queue
 
@@ -40,6 +41,31 @@ spm = StoragePeerManager(
 
 class MictlanXReplication(UT.IsolatedAsyncioTestCase):
 
+    async def test_pagination(self):
+        p2 = Pagination(n = 10, batch_size=5)
+        p = Pagination(n = 6, batch_size=50)
+        print(p.next())
+        print(p.next())
+        print(p.next())
+        p.reset()
+        print(p.next())
+        
+    @UT.skip("")
+    async def test_rmp(self):
+        rmp = ReplicaManagerParams()
+        rmp2 = ReplicaManagerParams(batch_index= 1)
+        rmp_check_res = rmp.check(rmp=rmp2)
+        print(str(rmp2), rmp2.elapsed_time_last_update())
+        T.sleep(2)
+        rmp2.update(batch_index = 1 )
+        T.sleep(2)
+        print(str(rmp2), rmp2.elapsed_time_last_update())
+        T.sleep(2)
+        rmp2.update(batch_index = 2 )
+        print(str(rmp2), rmp2.elapsed_time_last_update())
+        # print(str(rmp2))
+        print(rmp_check_res)
+        return self.assertTrue(rmp_check_res.is_some)
     @UT.skip("")
     async def test_deploy_workers(self):
         res =await spm.active_deploy_peers(rf=5)
@@ -51,6 +77,7 @@ class MictlanXReplication(UT.IsolatedAsyncioTestCase):
         print("RESULT",res)
         
 
+    @UT.skip("")
     async def test_access(self):
         spm_res = await spm.run()
         rm = ReplicaManager(q=asyncio.Queue(),spm = spm, elastic=True)

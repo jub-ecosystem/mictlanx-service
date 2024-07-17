@@ -6,6 +6,8 @@ from option import Some, NONE
 from mictlanxrouter.helpers.utils import Utils
 
 class MictlanXRouter(UT.TestCase):
+    
+    @UT.skip()
     def test_load_peers(self):
         MICTLANX_ROUTER_PEERS_JSON_PATH = "/home/nacho/Programming/Python/mictlanx-router/peers.json"
         peers_config = Utils.read_peers(path = MICTLANX_ROUTER_PEERS_JSON_PATH)

@@ -2,34 +2,36 @@ import humanfriendly as HF
 import asyncio
 import os
 import time as T
+from option import Option,NONE, Some
 from mictlanxrouter.peer_manager import StoragePeerManager
 from mictlanx.logger.log import Log
-import queue
 
-MICTLANX_ROUTER_LOG_NAME     = os.environ.get("MICTLANX_ROUTER_LOG_NAME","mictlanx-spm-0")
-MICTLANX_ROUTER_LOG_INTERVAL = int(os.environ.get("MICTLANX_ROUTER_LOG_INTERVAL","24"))
-MICTLANX_ROUTER_LOG_WHEN     = os.environ.get("MICTLANX_ROUTER_LOG_WHEN","h")
-MICTLANX_ROUTER_LOG_SHOW     = bool(int(os.environ.get("MICTLANX_ROUTER_LOG_SHOW","1")))
-LOG_PATH                     = os.environ.get("LOG_PATH","/log")
-log                          = Log(
-        name                   = MICTLANX_ROUTER_LOG_NAME,
-        console_handler_filter = lambda x: MICTLANX_ROUTER_LOG_SHOW,
-        interval               = MICTLANX_ROUTER_LOG_INTERVAL,
-        when                   = MICTLANX_ROUTER_LOG_WHEN,
+MICTLANX_SPM_LOG_NAME     = os.environ.get("MICTLANX_SPM_LOG_NAME","mictlanx-spm-0")
+MICTLANX_SPM_LOG_INTERVAL = int(os.environ.get("MICTLANX_SPM_LOG_INTERVAL","24"))
+MICTLANX_SPM_LOG_WHEN     = os.environ.get("MICTLANX_SPM_LOG_WHEN","h")
+MICTLANX_SPM_SHOW_LOGS    = bool(int(os.environ.get("MICTLANX_SPM_SHOW_LOGS","0")))
+LOG_PATH                  = os.environ.get("LOG_PATH","/log")
+log                       = Log(
+        name                   = MICTLANX_SPM_LOG_NAME,
+        console_handler_filter = lambda x: MICTLANX_SPM_SHOW_LOGS,
+        interval               = MICTLANX_SPM_LOG_INTERVAL,
+        when                   = MICTLANX_SPM_LOG_WHEN,
         path                   = LOG_PATH
 )
+
+
+
 
 def run_async_healer(
         ph:StoragePeerManager,
         # heartbeat:str="10s",
-        max_idle_time:str ="10s",
-        queue_tick_timeout:str="5s",
 ):
     async def __run_async_healer():
         # _heartbeat = HF.parse_timespan(heartbeat)
+        params = await ph.get_params()
         last_time = T.time()
-        _queue_tick_timeout = HF.parse_timespan(queue_tick_timeout)
-        _max_idle_time = HF.parse_timespan(max_idle_time)
+        _queue_tick_timeout = HF.parse_timespan(params.queue_tick_timeout)
+        _max_idle_time = HF.parse_timespan(params.max_idle_time)
         while True:
             try:
                 event = ph.q.get_nowait()
@@ -59,7 +61,7 @@ def run_async_healer(
                 log.warn({
                     "event":"SPM.QUEUE.EMPTY",
                     "elapsed_time":HF.format_timespan(elapsed_time),
-                    "max_idle_time": max_idle_time
+                    "max_idle_time": params.max_idle_time
                 })
                 if elapsed_time >= _max_idle_time:
                     last_time = T.time()

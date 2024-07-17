@@ -28,14 +28,12 @@ class DeployPeersResult:
     service_time:float 
     technique:str = "ACTIVE"
 
-class StoragePeerManager:
+
+class StoragePeerManagerParams(object):
     def __init__(self,
-        q:Queue,
-        peers:List[Peer],
-        summoner:Summoner,
-        name: str="mictlanx-peer-manager-0",
-        show_logs:bool=True,
-        max_tries:int =3,
+        max_retries:int = 2,
+        max_idle_time:str ="10s",
+        queue_tick_timeout:str="5s",
         max_timeout_to_recover:str="30s",
         base_port:int = 25000,
         base_protocol:str = "http",
@@ -44,7 +42,56 @@ class StoragePeerManager:
         summoner_mode:str ="docker",
         max_recover_time_until_restart:str= "1m",
         peers_config_path:str = "", 
-        max_timeout_to_save_peer_config:str = "30min"
+        max_timeout_to_save_peer_config:str = "30min",
+        peer_elastic:bool = True,
+    ):
+        self.peer_elastic = peer_elastic
+        self.max_retries = max_retries
+        self.max_idle_time = max_idle_time
+        self.queue_tick_timeout = queue_tick_timeout
+        # self.max_idle_time = max_idle_time
+        self.queue_tick_timeout = queue_tick_timeout
+        self.max_timeout_to_recover = max_timeout_to_recover
+        self.base_port = base_port
+        self.base_protocol = base_protocol
+        self.physical_nodes_indexes = physical_nodes_indexes
+        self.debug = debug
+        self.summoner_mode = summoner_mode
+        self.max_recover_time_until_restart = max_recover_time_until_restart
+        self.peers_config_path = peers_config_path
+        self.max_timeout_to_save_peer_config = max_timeout_to_save_peer_config
+        self.__last_update_at       = T.time()
+
+    def check(self, spmp: 'StoragePeerManagerParams') -> Option['StoragePeerManagerParams']:
+        if (self.max_idle_time != spmp.max_idle_time or
+            self.max_retries != spmp.max_retries or 
+            self.queue_tick_timeout != spmp.queue_tick_timeout or
+            self.max_timeout_to_recover != spmp.max_timeout_to_recover or
+            self.base_port != spmp.base_port or
+            self.base_protocol != spmp.base_protocol or
+            self.physical_nodes_indexes != spmp.physical_nodes_indexes or
+            self.debug != spmp.debug or
+            self.summoner_mode != spmp.summoner_mode or
+            self.max_recover_time_until_restart != spmp.max_recover_time_until_restart or
+            self.peers_config_path != spmp.peers_config_path or
+            self.max_timeout_to_save_peer_config != spmp.max_timeout_to_save_peer_config):
+            return Some(spmp)
+        return NONE 
+
+    def elapsed_time_last_update(self):
+        return HF.format_timespan(T.time() - self.__last_update_at)
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+class StoragePeerManager:
+    def __init__(self,
+        q:Queue,
+        peers:List[Peer],
+        summoner:Summoner,
+        name: str="mictlanx-peer-manager-0",
+        show_logs:bool=True,
+        params:Option[StoragePeerManagerParams] = NONE
     ):
         """
         [args]
@@ -52,6 +99,7 @@ class StoragePeerManager:
         peers: The list of init storage peers
         summoner: Instance of xolo summoner
         name: logger name 
+        params:StoragePeersManagerParams
         show_logs: Enable if true the logs otherwise it disable it
         max_tries: Number of max retries begore fail
         max_timeout_to_recover: the number of seconds before try to recover the unavailable peers
@@ -61,38 +109,31 @@ class StoragePeerManager:
         summoner_mode: Mode of summoner (must be in the summoner object)
         max_recover_time_until_restart: default 5min if the peers not respond after 5mon the summoner restart the peers
         """
-        self.max_timeout_to_save_peer_config = HF.parse_timespan(max_timeout_to_save_peer_config)
-        self.debug        = debug
-        self.peer_config_path =peers_config_path 
+        self.params = params.unwrap() if params.is_some else StoragePeerManagerParams()
+        self.max_timeout_to_save_peer_config = HF.parse_timespan(self.params.max_timeout_to_save_peer_config)
+        self.debug        = self.params.debug
+        self.peer_config_path =self.params.peers_config_path 
         self.peers_config = RouterUtils.read_peers(path=self.peer_config_path).unwrap_or({})
-        # print("PEEER_CONFIG", self.peers_config)
-
         self.is_running        :bool        = True
         self.operations_counter:int         = 0
         self.lock                           = aiorwlock.RWLock(fast=True)
         self.peers             :List[Peer]  = []
         self.available_peers    :List[Peer] = peers
         self.summoner          :Summoner    = summoner
-        self.summoner_mode                  = summoner_mode
-        self.base_port                      = base_port
-        self.base_protocol                  = base_protocol
-        # self.
-        self.physical_nodes_indexes         = physical_nodes_indexes
         self.local_ip_addr                  = "localhost"
-        # self.summoner.
-        # self.available_peers
+        self.params_lock = aiorwlock.RWLock(fast=True)
         self.time_last_recover_by_peer:Dict[str,float]  = {}
-        self.max_recover_time_until_restart =  HF.parse_timespan(max_recover_time_until_restart)
+        self.max_recover_time_until_restart =  HF.parse_timespan(self.params.max_recover_time_until_restart)
         self.unavailable_peers:List[Peer]           = []
         self.__peer_ufs       :Dict[str, PeerStats] = {}
         self.global_stats     :PeerStatsResponse    = PeerStatsResponse.empty()
         self.__peers_stats_responses:Dict[str, PeerStatsResponse] = {}
-        self.max_timeout_recover = HF.parse_timespan(max_timeout_to_recover)
+        self.max_timeout_to_recover = HF.parse_timespan(self.params.max_timeout_to_recover)
         self.last_recover_tick = T.time()
         self.last_to_save_peer_config = T.time()
         self.q= q
         self.completed_tasks:List[str] = []
-        self.max_tries = max_tries
+        # self.max_tries = self.params.max_tries
         self.__log             = Log(
             name = name,
             console_handler_filter=lambda x: show_logs,
@@ -107,6 +148,19 @@ class StoragePeerManager:
         }
         # self.total_gets_counter = 0
         # self.total_puts_counter = 0
+    
+
+    async def get_params(self,)->StoragePeerManagerParams:
+        async with self.params_lock.reader_lock:
+            return self.params
+    async def update_params(self,**kwargs):
+        async with self.params_lock.writer_lock:
+            self.max_timeout_to_recover         = HF.parse_timespan(kwargs.get("max_timeout_to_recover",self.params.max_timeout_to_recover))
+            self.max_recover_time_until_restart = HF.parse_timespan(kwargs.get("max_recover_time_until_restart",self.params.max_recover_time_until_restart))
+            self.max_timeout_to_save_peer_config = HF.parse_timespan(kwargs.get("max_timeout_to_save_peer_config", self.params.max_timeout_to_save_peer_config))
+
+            self.params.update(**kwargs)
+
     async def active_deploy_peers(
         self,
         disk:int= HF.parse_size("10GB"),
@@ -122,12 +176,13 @@ class StoragePeerManager:
         success    = []
         failed     = []
         # n = self.get_available_peers
+        params = await self.get_params()
         n = await self.get_n_all_peers()
         deployed_peers:List[Peer] = []
         for i in range(rf):
             peer_index =  i + n
             peer_id = "mictlanx-peer-{}".format(peer_index)
-            port = self.base_port + peer_index
+            port = params.base_port + peer_index
             selected_node = (n+i)%len(self.physical_nodes_indexes)
             (container_id, port, result) = await self.deploy_peer(
                 container_id=peer_id,
@@ -168,9 +223,9 @@ class StoragePeerManager:
                 success.append(peer_id)
                 peer = Peer(
                         peer_id  = peer_id,
-                        ip_addr  = peer_id if not self.debug else self.local_ip_addr,
+                        ip_addr  = peer_id if not params.debug else self.local_ip_addr,
                         port     = port,
-                        protocol = self.base_protocol
+                        protocol = params.base_protocol
                 )
                 deployed_peers.append(peer)
             else:
@@ -223,6 +278,7 @@ class StoragePeerManager:
     )->Tuple[str, int,Result[SummonContainerResponse,Exception]]:
         """return the <container_id> <port> <result>"""
         _start_time     = T.time()
+        params      = await self.get_params()
         local_path = "{}/local".format(base_path)
         log_path = "{}/log".format(base_path)
         data_path = "{}/data".format(base_path)
@@ -263,7 +319,7 @@ class StoragePeerManager:
         ))
         # print("PAYLOAD", payload)
         response        = self.summoner.summon(
-            mode= self.summoner_mode,
+            mode= params.summoner_mode,
             payload=payload, 
         )
  
@@ -311,6 +367,15 @@ class StoragePeerManager:
     async def get_available_peers_ids(self):
         async with self.lock.reader_lock:
             return list(set(list(map(lambda x:x.peer_id, self.available_peers))))
+    
+    async def get_len_available_peers(self):
+        async with self.lock.reader_lock:
+            return len(self.available_peers)
+
+    async def get_len_unavailable_peers(self):
+        async with self.lock.reader_lock:
+            return len(self.unavailable_peers)
+
     async def get_unavailable_peers_ids(self):
         async with self.lock.reader_lock:
             return list(set(list(map(lambda x:x.peer_id, self.unavailable_peers))))
@@ -404,73 +469,92 @@ class StoragePeerManager:
         async with self.lock.writer_lock:
             self.__peers_stats_responses = xs_dict
         return xs
-    async def recover(self):
-        current_peers = set(await self.get_available_peers_ids())
-        unavailable_peers = set(await self.get_unavailable_peers_ids())
-        to_recover_peers = unavailable_peers.difference(current_peers)
+    async def recover(self,params:StoragePeerManagerParams):
+        try:
+            current_peers     = set(await self.get_available_peers_ids())
+            unavailable_peers = set(await self.get_unavailable_peers_ids())
+            to_recover_peers  = unavailable_peers.difference(current_peers)
+            async with self.lock.writer_lock:
+                for unavailable_peer in self.unavailable_peers:
+                    if unavailable_peer.peer_id in to_recover_peers:
+                        last_time = self.time_last_recover_by_peer.setdefault(unavailable_peer.peer_id,T.time())
+                        elapsed   = T.time() - last_time
+                        elapsed_str = HF.format_timespan(elapsed)
 
-        async with self.lock.writer_lock:
-            for unavailable_peer in self.unavailable_peers:
-                if unavailable_peer.peer_id in to_recover_peers:
-                    last_time = self.time_last_recover_by_peer.setdefault(unavailable_peer.peer_id,T.time())
-                    elapsed   = T.time() - last_time
-
-                    # print("ELAPSED", HF.format_timespan(elapsed), self.max_recover_time_until_restart)
-                    if elapsed >= self.max_recover_time_until_restart:
-                        (_,_,res) = await self.deploy_peer(container_id=unavailable_peer.peer_id,port=unavailable_peer.port)
-                        self.time_last_recover_by_peer[unavailable_peer.peer_id] = T.time()
-                        if res.is_err:
-                            self.__log.error({
-                                "event":"DEPLOY.PEER.FAILED",
-                                "detail":str(res.unwrap_err())
+                        if elapsed >= self.max_recover_time_until_restart and params.peer_elastic:
+                            (_,_,res) = await self.deploy_peer(container_id=unavailable_peer.peer_id,port=unavailable_peer.port)
+                            self.time_last_recover_by_peer[unavailable_peer.peer_id] = T.time()
+                            if res.is_err:
+                                self.__log.error({
+                                    "event":"DEPLOY.PEER.FAILED",
+                                    "detail":str(res.unwrap_err())
+                                })
+                            else:
+                                self.__log.info({
+                                    "event":"PEER.RESTART",
+                                    "elapsed":elapsed_str,
+                                    "max_timeout":self.max_recover_time_until_restart,
+                                    "ok":res.is_ok
+                                })
+                        elif elapsed >= self.max_recover_time_until_restart and not params.peer_elastic:
+                            self.__log.warning({
+                                "event":"PEER.ELASTICITY.DISABLED",
+                                "elapsed":elapsed_str,
+                                "peer_elastic":params.peer_elastic 
                             })
-                        else:
-                            self.__log.info({
-                                "event":"PEER.RESTART",
-                                "elapsed":elapsed,
-                                "max_timeout":self.max_recover_time_until_restart,
-                                "ok":res.is_ok
-                            })
-           
-                    self.__log.debug({
-                        "event":"PEER.RECOVERING",
-                        "peer_id":unavailable_peer.peer_id,
-                        "elapsed":elapsed,
-                        "max_recover_time_until_restart":HF.format_timespan(self.max_recover_time_until_restart)
-                    })
-                    self.peers.append(unavailable_peer)
+            
+                        self.__log.debug({
+                            "event":"PEER.RECOVERING",
+                            "peer_id":unavailable_peer.peer_id,
+                            "elapsed":elapsed_str,
+                            "max_recover_time_until_restart":params.max_recover_time_until_restart
+                        })
+                        self.peers.append(unavailable_peer)
+        except Exception as e:
+            self.__log.error({
+                "event":"RECOVER.EXCEPTION",
+                "detail":str(e)
+            })
     async def run(self):
         try:
-            # print("PM","RUNNNN")
-            current_time = T.time()
-            (available_peers, unavailable_peers)= await self.check_peers_availability()
-            current_stats = await self.stats()
-            self.global_stats = sum(current_stats, PeerStatsResponse.empty())
-            elapsed_time = current_time - self.last_recover_tick
-            elapsed_time_to_save_peer_config = current_time - self.last_to_save_peer_config
+            current_time                         = T.time()
+            params                               = await self.get_params()
+            (available_peers, unavailable_peers) = await self.check_peers_availability()
+            current_stats                        = await self.stats()
+            self.global_stats                    = sum(current_stats, PeerStatsResponse.empty())
+            elapsed_time                         = current_time - self.last_recover_tick
+            elapsed_time_to_save_peer_config     = current_time - self.last_to_save_peer_config
             # print("__"*50)
             self.__log.debug({
                 "event":"PEER.MANAGER.TICK",
                 "elapsed_time":HF.format_timespan(elapsed_time),
-                "max_timeout_to_recover":self.max_timeout_recover,
+                "max_timeout_to_recover":params.max_timeout_to_recover,
                 "available_peers":len(available_peers),
                 "unavailable_peers":len(unavailable_peers),
             })
-            if elapsed_time >= self.max_timeout_recover:
-                await self.recover()
+            
+            if elapsed_time >= self.max_timeout_to_recover:
+                await self.recover(
+                    params=params
+                )
                 self.last_recover_tick = T.time()
+                
             if elapsed_time_to_save_peer_config >= self.max_timeout_to_save_peer_config:
-                res = RouterUtils.save_peers(path=self.peer_config_path,peers_config=self.peers_config)
+                res = RouterUtils.save_peers(path=params.peers_config_path,peers_config=self.peers_config)
                 self.__log.debug({
                     "event":"SAVE.PEERS.CONFIG",
                     "ok":res.is_ok,
-                    "path":self.peer_config_path
+                    "path":params.peers_config_path
                 })
                 self.last_to_save_peer_config = T.time()
                 
             # if elapsed_time >= self.max
             return Ok(0)
         except Exception as e:
+            self.__log.error({
+                "event":"SPM.RUN.EXCEPTION",
+               "detail":str(e)
+            })
             return Err(e)
         # finally:
             # self.last_tick = T.time()

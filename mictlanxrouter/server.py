@@ -20,10 +20,10 @@ from option import Result,NONE,Some,Ok,Err
 from fastapi.middleware.gzip import GZipMiddleware
 from ipaddress import IPv4Network
 # 
-from mictlanxrouter.replication import LoadBalancer,ReplicaManager,ReplicationEvent
+from mictlanxrouter.replication import ReplicaManager,ReplicationEvent,ReplicaManagerParams,DataReplicator
 from mictlanxrouter.interfaces.dto.metadata import Metadata
 from mictlanxrouter.interfaces.dto.index import PeerPayload,DeletedByBallIdResponse,DeletedByKeyResponse
-from mictlanxrouter.peer_manager.healer import StoragePeerManager
+from mictlanxrouter.peer_manager.healer import StoragePeerManager,StoragePeerManagerParams
 from mictlanxrouter.interfaces.dto.index import PeerElasticPayload
 # 
 from mictlanx.v4.interfaces.responses import PutMetadataResponse,PeerPutMetadataResponse
@@ -31,17 +31,18 @@ from mictlanx.logger.log import Log
 from mictlanx.logger.tezcanalyticx.tezcanalyticx import TezcanalyticXHttpHandler
 from mictlanx.v4.summoner.summoner import  Summoner
 from mictlanx.utils.index import Utils
-from mictlanxrouter._async import run_async_healer,run_rm
+from mictlanxrouter._async import run_async_healer,run_rm,run_replicator
 from mictlanxrouter.tasksx import TaskX,DefaultTaskManager
 
 TEZCANALYTICX_ENABLED       = bool(int(os.environ.get("TEZCANALYTICX_ENABLE","0")))
-TEZCANALYTICX_FLUSH_TIMEOUT = os.environ.get("TEZCANALYTICX_FLUSH_TIMEOUT","10s")
+TEZCANALYTICX_FLUSH_TIMEOUT = os.environ.get("TEZCANALYTICX_FLUSH_TIMEOUT","5s")
 TEZCANALYTICX_BUFFER_SIZE   = int(os.environ.get("TEZCANALYTICX_BUFFER_SIZE","100"))
 TEZCANALYTICX_PATH          = os.environ.get("TEZCANALYTICX_PATH","/api/v4/events/")
 TEZCANALYTICX_PORT          = int(os.environ.get("TEZCANALYTICX_PORT","45000"))
 TEZCANALYTICX_HOSTNAME      = os.environ.get("TEZCANALYTICX_HOSTNAME","localhost")
-TEZCANALYTICX_LEVEL         = int(os.environ.get("TEZCANALYTICX_LEVEL","0"))
+TEZCANALYTICX_LEVEL         = int(os.environ.get("TEZCANALYTICX_LEVEL","20"))
 TEZCANALYTICX_PROTOCOL      = os.environ.get("TEZCANALYTICX_PROTOCOL","http")
+TEZCANALYTICX_HEARTBEAT     = os.environ.get("TEZCANALYTICX_HEARTBEAT","1s")
 LOG_PATH                    = os.environ.get("LOG_PATH","/log")
 # 
 MICTLANX_ROUTER_HOST                         = os.environ.get("MICTLANX_ROUTER_HOST","localhost")
@@ -57,7 +58,6 @@ MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE     = int(os.environ.get("MICTLANX_ROUT
 # MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT        = os.environ.get("MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT","5m")
 # MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT     = os.environ.get("MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT","30s")
 MICTLANX_ROUTER_SYNC_FAST                    = bool(int(os.environ.get("MICTLANX_ROUTER_SYNC_FAST","1")))
-MICTLANX_ROUTER_PEER_BASE_PORT               = int(os.environ.get("MICTLANX_PEER_BASE_PORT","25000"))
 MICTLANX_ROUTER_MAX_PEERS                    = int(os.environ.get("MICTLANX_ROUTERMAX_PEERS","10"))
 MICTLANX_ROUTER_MAX_TTL                      = int(os.environ.get("MICTLANX_ROUTER_MAX_TTL","3"))
 MICTLANX_ROTUER_AVAILABLE_NODES              = os.environ.get("MICTLANX_ROUTER_AVAILABLE_NODES","0;1;2;3;4;5;6;7;8;9;10").split(";")
@@ -69,29 +69,36 @@ MICTLANX_ROUTER_MAX_TASKS                    = int(os.environ.get("MICTLANX_ROUT
 MICTLANX_ROUTER_MAX_CONCURRENCY              = int(os.environ.get("MICTLANX_ROUTER_MAX_CONCURRENCY","5"))
 MICTLANX_ROUTER_MAX_PEERS_RF                 = int(os.environ.get("MICTLANX_ROUTER_MAX_PEERS_RF","5"))
 MICTLANX_ROUTER_NETWORK_ID                   = os.environ.get("MICTLANX_ROUTER_NETWORK_ID","mictlanx")
-MICTLANX_ROUTER_BASE_PROTOCOL                = os.environ.get("MICTLANX_ROUTER_BASE_PROTOCOL","http")
 
 # Storage peer manager
-MICTLANX_SPM_SHOW_LOGS                       = bool(int(os.environ.get("MICTLANX_SPM_SHOW_LOGS","1")))
-MICTLANX_SPM_DEBUG                           = bool(int(os.environ.get("MICTLANX_SPM_DEBUG","1")))
+MICTLANX_SPM_SHOW_LOGS                       = bool(int(os.environ.get("MICTLANX_SPM_SHOW_LOGS","0")))
+MICTLANX_SPM_DEBUG                           = bool(int(os.environ.get("MICTLANX_SPM_DEBUG","0")))
 MICTLANX_SPM_MAX_TRIES                       = int(os.environ.get("MICTLANX_SPM_MAX_TRIES","10"))
 MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER          = os.environ.get("MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER","10s")
 MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR        = os.environ.get("MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR",";")
-MICTLANX_SPM_PHYSICAL_NODES_INDEXES          = os.environ.get("MICTLANX_SPM_PHYSICAL_NODES_INDEXES","0;2;3;4;5").split(MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR)
+MICTLANX_SPM_PHYSICAL_NODES_INDEXES          = list(map(int,os.environ.get("MICTLANX_SPM_PHYSICAL_NODES_INDEXES","0;2;3;4;5").split(MICTLANX_SPM_PHYSICAL_NODES_SEPARATOR)))
 MICTLANX_SPM_MAX_IDLE_TIME                   = os.environ.get("MICTLANX_SPM_MAX_IDLE_TIME","5s")
 MICTLANX_SPM_QUEUE_TICK_TIMEOUT              = os.environ.get("MICTLANX_SPM_QUEUE_TICK_TIMEOUT","2s")
 MICTLANX_SPM_PEER_CONFIG_PATH                = os.environ.get("MICTLANX_SPM_PEER_CONFIG_PATH","/home/nacho/Programming/Python/mictlanx-router/peers-dev.json")
 MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE = os.environ.get("MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE","5m")
 MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART   = os.environ.get("MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART","10s")
+MICTLANX_SPM_PEERS_BASE_PORT                 = int(os.environ.get("MICTLANX_SPM_PEERS_BASE_PORT","25000"))
+MICTLANX_SPM_PEERS_BASE_PROTOCOL             = os.environ.get("MICTLANX_SPM_PEERS_BASE_PROTOCOL","http")
+MICTLANX_SPM_PEERS_ELASTIC                    = bool(int(os.environ.get("MICTLANX_SPM_PEERS_ELASTIC","1")))
 # Replica manager
 MICTLANX_RM_ELASTIC             = bool(int(os.environ.get("MICTLANX_RM_ELASTIC","1")))
 MICTLANX_RM_SHOW_LOGS           = bool(int(os.environ.get("MICTLANX_RM_SHOW_LOGS","1")))
-MICTLANX_RM_QUEUE_TICK_TIMEOUT  = os.environ.get("MICTLANX_RM_QUEUE_TICK_TIMEOUT","20s")
-MICTLANX_RM_QUEUE_MAX_IDLE_TIME = os.environ.get("MICTLANX_RM_QUEUE_MAX_IDLE_TIME","10s")
+MICTLANX_RM_QUEUE_MAX_IDLE_TIME = os.environ.get("MICTLANX_RM_QUEUE_MAX_IDLE_TIME","5s")
+MICTLANX_RM_BATCH_SIZE          = int(os.environ.get("MICTLANX_RM_BATCH_SIZE", "1000"))
+MICTLANX_RM_HEARTBEAT           = os.environ.get("MICTLANX_RM_HEARTBEAT", "2s")
+# Replicator
+MICTLANX_REPLICATOR_QUEUE_HEARTBEAT = os.environ.get("MICTLANX_REPLICATOR_QUEUE_HEARTBEAT","5s")
+
 # Client
 MICTLANX_PEERS_STR                = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:25000 mictlanx-peer-1:localhost:25001 mictlanx-peer-2:localhost:25002")
 MICTLANX_PROTOCOL                 = os.environ.get("MICTLANX_PROCOTOL","http")
 MICTLANX_PEERS                    = [] if MICTLANX_PEERS_STR == "" else list(Utils.peers_from_str_v2(peers_str=MICTLANX_PEERS_STR,separator=" ", protocol=MICTLANX_PROTOCOL,) )
+
 MICTLANX_API_VERSION              = os.environ.get("MICTLANX_API_VERSION","4")
 MICTLANX_TIMEOUT                  = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
 
@@ -128,8 +135,8 @@ if TEZCANALYTICX_ENABLED :
         port          = TEZCANALYTICX_PORT,
         hostname      = TEZCANALYTICX_HOSTNAME,
         level         = TEZCANALYTICX_LEVEL,
-        protocol      = TEZCANALYTICX_PROTOCOL
-        # os.environ.get("TEZCANALYTICX_PROTOCOL","http")
+        protocol      = TEZCANALYTICX_PROTOCOL,
+        heartbeat     = TEZCANALYTICX_HEARTBEAT
     )
     log.addHandler(tezcanalytix_handler)
 
@@ -137,8 +144,7 @@ if TEZCANALYTICX_ENABLED :
 
 
 
-replicator_queue = Queue(maxsize= MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE )
-replicas_map:Dict[str, Set[str]] = {}
+# replicator_queue = Queue(maxsize= MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE )
 replica_map_rwlock = aiorwlock.RWLock(fast=MICTLANX_ROUTER_SYNC_FAST )
 peer_healer_rwlock = aiorwlock.RWLock(fast=MICTLANX_ROUTER_SYNC_FAST )
 
@@ -151,32 +157,56 @@ summoner        = Summoner(
         MICTLANX_SUMMONER_SUBNET
      ))
 )
+
+# ============= Storage Peer Manager ============================ 
 storage_peer_manager = StoragePeerManager(
     q = Queue(maxsize=100),
     peers=MICTLANX_PEERS,
     name="mictlanx-peer-manager-0",
     show_logs=MICTLANX_SPM_SHOW_LOGS,
     summoner=summoner,
-    summoner_mode=MICTLANX_SUMMONER_MODE,
-    base_port= MICTLANX_ROUTER_PEER_BASE_PORT,
-    base_protocol= MICTLANX_ROUTER_BASE_PROTOCOL,
-    debug = MICTLANX_SPM_DEBUG,
-    max_timeout_to_recover=MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER,
-    max_recover_time_until_restart= MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART,
-    max_tries= MICTLANX_SPM_MAX_TRIES,
-    physical_nodes_indexes= MICTLANX_SPM_PHYSICAL_NODES_INDEXES,
-    peers_config_path=MICTLANX_SPM_PEER_CONFIG_PATH,
-    max_timeout_to_save_peer_config= MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE
+    params= Some(StoragePeerManagerParams(
+        summoner_mode=MICTLANX_SUMMONER_MODE,
+        base_port=MICTLANX_SPM_PEERS_BASE_PORT,
+        base_protocol=MICTLANX_SPM_PEERS_BASE_PROTOCOL,
+        debug=MICTLANX_SPM_DEBUG,
+        max_idle_time=MICTLANX_SPM_MAX_IDLE_TIME,
+        max_recover_time_until_restart=MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART,
+        max_retries=MICTLANX_ROUTER_MAX_TRIES,
+        max_timeout_to_recover=MICTLANX_SPM_MAX_TIMEOUT_TO_RECOVER,
+        max_timeout_to_save_peer_config=MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE,
+        peers_config_path=MICTLANX_SPM_PEER_CONFIG_PATH,
+        physical_nodes_indexes=MICTLANX_SPM_PHYSICAL_NODES_INDEXES,
+        queue_tick_timeout=MICTLANX_SPM_QUEUE_TICK_TIMEOUT,
+        peer_elastic= MICTLANX_SPM_PEERS_ELASTIC,
+
+    ))
 )
+# ============= Replica Manager ============================ 
 rm_q = asyncio.Queue()
 replica_manager = ReplicaManager(
     q = rm_q,
     spm= storage_peer_manager,
     elastic= MICTLANX_RM_ELASTIC,
-    show_logs=MICTLANX_RM_SHOW_LOGS
+    show_logs=MICTLANX_RM_SHOW_LOGS,
+    params= Some(
+        ReplicaManagerParams(
+            batch_index=0,
+            batch_size=MICTLANX_RM_BATCH_SIZE,
+            current_end_index=-1,
+            current_start_index=-1,
+            elastic=MICTLANX_RM_ELASTIC,
+            heartbeat_t=MICTLANX_RM_HEARTBEAT,
+            local_n_balls_map={},
+            queue_max_idle_timeout=MICTLANX_RM_QUEUE_MAX_IDLE_TIME,
+            total_n_balls=-1,
+        )
+    )
 )
+# ============= Data replicator ============================ 
+data_replicator_q = asyncio.Queue()
+data_replicator = DataReplicator(queue= data_replicator_q, rm = replica_manager)
 
-# 
 
  
 log.debug({
@@ -202,7 +232,7 @@ log.debug({
     # "MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT": MICTLANX_ROUTER_REPLICATOR_QUEUE_TIMEOUT,
     "MICTLANX_ROUTER_SYNC_FAST": MICTLANX_ROUTER_SYNC_FAST,
     "MICTLANX_ROUTER_LB_ALGORITHM": MICTLANX_ROUTER_LB_ALGORITHM,
-    "MICTLANX_ROUTER_PEER_BASE_PORT": MICTLANX_ROUTER_PEER_BASE_PORT,
+    "MICTLANX_ROUTER_PEER_BASE_PORT": MICTLANX_SPM_PEERS_BASE_PORT,
     "MICTLANX_ROUTER_MAX_PEERS":MICTLANX_ROUTER_MAX_PEERS,
     "MICTLANX_ROUTER_MAX_TTL": MICTLANX_ROUTER_MAX_TTL,
     "MICTLANX_ROUTER_AVAILABLE_NODES": ";".join(MICTLANX_ROTUER_AVAILABLE_NODES),
@@ -226,22 +256,20 @@ async def lifespan(app:FastAPI):
     t1 = asyncio.create_task(
         run_async_healer(
             ph=storage_peer_manager,
-            # heartbeat= MICTLANX_ROUTER_PEER_HEALER_HEARTBEAT,
-            queue_tick_timeout=MICTLANX_SPM_QUEUE_TICK_TIMEOUT,
-            max_idle_time= MICTLANX_SPM_MAX_IDLE_TIME
         )
     )
     t0 = asyncio.create_task(run_rm(
         rm = replica_manager,
-        queue_max_idle_time=MICTLANX_RM_QUEUE_MAX_IDLE_TIME,
-        queue_tick_timeout= MICTLANX_RM_QUEUE_TICK_TIMEOUT
     ))
     await storage_peer_manager.q.put(1)
-    # t2 = asyncio.create_task(run_replicator())
+    t2 = asyncio.create_task(run_replicator(
+        data_replicator = data_replicator,
+        heartbeat= MICTLANX_REPLICATOR_QUEUE_HEARTBEAT
+    ) )
     yield
     t0.cancel()
     t1.cancel()
-    # t2.cancel()
+    t2.cancel()
 
 app = FastAPI(
     root_path=os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"),
@@ -274,6 +302,56 @@ def generate_openapi():
     return app.openapi_schema
 app.openapi = generate_openapi
 
+
+
+print("BEFORE_ROUTES")
+# ======================= Replication ============================
+@app.post("/api/v4/replicate")
+async def replication(replication_event:ReplicationEvent):
+    global log
+    try:
+        start_time = T.time()
+        response_time = T.time() - start_time
+        await data_replicator.put_task(replication_event)
+        
+        # print(str(replication_event))
+        return JSONResponse(
+            content=jsonable_encoder(
+                {
+                    "replication_event_id":replication_event.id,
+                    "response_time":response_time
+                }
+            )
+        )
+    except Exception as e:
+        log.error({
+            "msg":str(e)
+        })
+        raise e
+
+@app.get("/api/v4/replicate")
+async def get_replication():
+    global log
+    try:
+        print("GET_TREP")
+        start_time = T.time()
+        tasks = await data_replicator.get_tasks()
+        
+        response_time = T.time() - start_time
+        log.info({
+            "event":"REPLICATION.TASKS",
+            "n":len(tasks),
+            "response_time":response_time
+        })
+        # print(str(replication_event))
+        return JSONResponse(
+            content=jsonable_encoder(tasks)
+        )
+    except Exception as e:
+        log.error({
+            "msg":str(e)
+        })
+        raise e
 
 
 # ======================= Peers ============================
@@ -461,10 +539,10 @@ async def leave_peer(peer_id:str):
 async def put_metadata(
     bucket_id:str,
     metadata:Metadata, 
-    # peer_id:Annotated[Union[str,None], Header()]=None,
     update:Annotated[Union[str,None], Header()] = "0"
 ):
-    start_time       = T.time()
+    arrival_time       = T.time()
+    start_at       = T.time_ns()
     headers          = {"Update":update}
     if not bucket_id == metadata.bucket_id:
         raise HTTPException(status_code=400, detail="Bucket ID mismatch: {} != {}".format(bucket_id, metadata.bucket_id))
@@ -473,6 +551,7 @@ async def put_metadata(
     bucket_id = Utils.sanitize_str(x = bucket_id)
 
     # last_replicas = await replica_manager.(bucket_id=bucket_id,key=key)
+
     current_replicas = await replica_manager.get_current_replicas_ids(bucket_id=bucket_id,key=key)
     if len(current_replicas) >0:
         detail = "{}/{} already exists.".format(metadata.bucket_id,metadata.key)
@@ -492,24 +571,29 @@ async def put_metadata(
         peer_ids=[],
         rf=metadata.replication_factor
     )
-    create_replica_result.current_replicas
+    if len(create_replica_result.success_replicas) ==0:
+        detail= "Put metadata failed, no available peers."
+        log.error({
+            "event":"NO.AVAILABLE.PEERS",
+            "bucket_id":bucket_id,
+            "key":key,
+            "detail":detail,
+            "available_peers":create_replica_result.available_replicas
+        })
+        raise HTTPException(status_code=500, detail=detail ,headers={} )
+    # print("CREATE_REPLICA", create_replica_result)
+    # create_replica_result.current_replicas
     combined_key = "{}@{}".format(bucket_id,key)
 
-    log.debug({
-        "event":"PUT.METADATA",
-        "bucket_id":bucket_id,
-        "combined_key":combined_key,
-        "key":key,
-        "current_replicas":current_replicas,
-        "new_replicas": create_replica_result.success_replicas,
-        "update":update,
-    })
+    log.debug("PUT.METADATA {} {}".format(bucket_id,key))
+
     try: 
         replicas = create_replica_result.success_replicas
         xs       =  await storage_peer_manager.from_peer_ids_to_peers(replicas)
         ordered_peer_ids = list(map(lambda x: x.peer_id, xs))
         tasks_ids = []
         for peer in xs:
+            inner_start_time = T.time()
             put_metadata_result:Result[PeerPutMetadataResponse,Exception] = peer.put_metadata(
                 bucket_id=metadata.bucket_id,
                 key=metadata.key,
@@ -537,26 +621,30 @@ async def put_metadata(
                 size=metadata.size,
                 content_type=metadata.content_type
             )
+            add_task_result = await tm.add_task(task= task)
+            if add_task_result.is_err:
+                raise add_task_result.unwrap_err()
+            tasks_ids.append(task.task_id)
             log.info({
                 "event":"PUT.METADATA",
+                "start_at":start_at,
+                "end_at":T.time_ns(),
                 "bucket_id":bucket_id,
                 "key":metadata.key,
                 "size":metadata.size,
                 "peer_id":peer.peer_id,
                 "task_id":task.task_id,
                 "content_type":task.content_type,
-                "service_time":T.time()- start_time
+                "replica_factor":metadata.replication_factor,
+                "response_time":T.time()- inner_start_time
             })
-            add_task_result = await tm.add_task(task= task)
-            if add_task_result.is_err:
-                raise add_task_result.unwrap_err()
-            tasks_ids.append(task.task_id)
+
         put_metadata_response = PutMetadataResponse(
             bucket_id=bucket_id,
             key=key,
             replicas=ordered_peer_ids,
             tasks_ids=tasks_ids,
-            service_time=T.time()- start_time,
+            service_time=T.time()- arrival_time,
         )
         return JSONResponse(content=jsonable_encoder(put_metadata_response))
 
@@ -594,6 +682,82 @@ async def put_metadata(
         raise HTTPException(status_code=500, detail=detail)
 
     
+@app.post("/api/v4/buckets/data/{task_id}/chunked")
+async def put_data_chunked(
+    task_id:str,
+    request: Request,
+):
+    start_time = T.time()
+    try:
+        task_maybe = await tm.get_task(task_id=task_id)
+        if task_maybe.is_err:
+            raise task_maybe.unwrap_err()
+        
+        task = task_maybe.unwrap()
+
+        maybe_peer = await storage_peer_manager.get_peer_by_id(peer_id=task.peer_id)
+        if maybe_peer.is_none:
+            raise HTTPException(status_code=404, detail="No peers available")
+        else:
+            peer = maybe_peer.unwrap()
+
+        headers= {}
+        chunks = request.stream()
+        result = await peer.put_chuncked_async(task_id=task_id, chunks = chunks,headers=headers)
+        if result.is_err:
+            raise result.unwrap_err()
+
+        response = result.unwrap()
+        res = await tm.delete_task(task_id=task_id)
+        log.info({
+            "event":"PUT.DATA",
+            "x_timestamp":T.time_ns(),
+            "bucket_id":task.bucket_id,
+            "key":task.key,
+            "size":task.size,
+            "task_id":task_id,
+            "peer_id":task.peer_id,
+            "content_type":task.content_type,
+            "deleted_tasks":res.is_ok,
+            "response_time":T.time() - start_time
+        })
+
+        return JSONResponse(content=jsonable_encoder(response))
+
+    except HTTPException as e:
+        log.error({
+            "event":"HTTP.EXCEPTION",
+            "detail":e.detail,
+            "status_code":e.status_code
+        })
+        raise HTTPException(status_code=500, detail = str(e))
+    except R.exceptions.HTTPError as e:
+        detail = str(e.response.content.decode("utf-8") )
+        # e.response.reason
+        status_code = e.response.status_code
+        log.error({
+            "event":"HTTPError",
+            "detail":detail,
+            "status_code":status_code,
+            "reason":e.response.reason,
+        })
+        raise HTTPException(status_code=status_code, detail=detail  )
+    except R.exceptions.ConnectionError as e:
+        detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
+        log.error({
+            "event":"CONNECTION.ERROR",
+            "detail":detail,
+            "status_code":500
+        })
+        raise HTTPException(status_code=500, detail=detail  )
+    except Exception as e:
+        log.error({
+            "event":"EXCEPTION",
+            "detail":str(e),
+            "status_code":500
+        })
+        raise HTTPException(status_code=500, detail = str(e))
+
 
 @app.post("/api/v4/buckets/data/{task_id}")
 async def put_data(
@@ -601,6 +765,7 @@ async def put_data(
     data:UploadFile, 
     peer_id:Annotated[Union[str,None], Header()]=None
 ):
+    start_at   = T.time_ns()
     start_time = T.time()
     maybe_task = await tm.get_task(task_id=task_id)
     if maybe_task.is_err:
@@ -626,12 +791,14 @@ async def put_data(
         # response = result.unwrap()
         log.info({
             "event":"PUT.DATA",
+            "start_at":start_at,
+            "end_at":T.time_ns(),
             "bucket_id":task.bucket_id,
             "key":task.key,
             "size":task.size,
             "task_id":task_id,
             "peer_id":peer.peer_id,
-            "service_time":T.time()- start_time
+            "response_time":T.time()- start_time
         })
         await tm.delete_task(task_id=task_id)
         return Response(content=None, status_code=201)
@@ -725,32 +892,6 @@ async def get_peers_stats(
 #> ======================= GET ============================
 
 
-@app.post("/api/v4/elastic/async")
-async def elastic_async(
-    replication_event:ReplicationEvent
-):
-    global replicator_queue
-    global log
-    try:
-        start_time = T.time()
-        await replicator_queue.put(item= replication_event)
-        response_time = T.time() - start_time
-        return JSONResponse(
-            content=jsonable_encoder(
-                {
-                    "replication_event_id":replication_event.id,
-                    "response_time":response_time
-                }
-            )
-        )
-    except Exception as e:
-        log.error({
-            "msg":str(e)
-        })
-        raise e
-
-
-
 
 
 @app.post("/api/v4/elastic")
@@ -798,28 +939,6 @@ async def elastic(
     )
 
 
-
-@app.post("/api/v4/replication")
-async def replication(replication_event:ReplicationEvent):
-    global replicator_queue
-    global log
-    try:
-        start_time = T.time()
-        await replicator_queue.put(item= replication_event)
-        response_time = T.time() - start_time
-        return JSONResponse(
-            content=jsonable_encoder(
-                {
-                    "replication_event_id":replication_event.id,
-                    "response_time":response_time
-                }
-            )
-        )
-    except Exception as e:
-        log.error({
-            "msg":str(e)
-        })
-        raise e
 
 
 
@@ -937,6 +1056,7 @@ async def get_metadata(
     
 ):
     try:
+        start_at   = T.time_ns()
         start_time = T.time()
         maybe_peer = await replica_manager.access(bucket_id=bucket_id,key=key)
         if maybe_peer.is_none:
@@ -962,13 +1082,13 @@ async def get_metadata(
         most_recent_metadata = metadata_result.unwrap()
         log.info({
             "event":"GET.METADATA",
+            "start_at":start_at,
+            "end_at":T.time_ns(),
             "bucket_id":bucket_id,
             "key":key,
-            # "consistency_model":consistency_model,
             "peer_id":most_recent_metadata.peer_id,
             "local_peer_id":most_recent_metadata.local_peer_id,
             "size":most_recent_metadata.metadata.size,
-            # "peers":peer_ids,
             "response_time":T.time()- start_time
         })
         return JSONResponse(content=jsonable_encoder(most_recent_metadata) )
@@ -1020,6 +1140,7 @@ async def get_data(
 ):
     # peers = ph.get_stats
     try:
+        start_at = T.time_ns()
         start_time = T.time()
         
         peer_id_param_is_empty = peer_id =="" or peer_id == None
@@ -1068,6 +1189,8 @@ async def get_data(
 
             log.info({
                 "event":"GET.DATA",
+                "start_at":start_at,
+                "end_at":T.time_ns(),
                 "bucket_id":bucket_id,
                 "key":key,
                 "size":metadata.metadata.size,
@@ -1414,98 +1537,6 @@ async def data_by_chunks(data:UploadFile,chunk_size:str="1MB"):
             break
         yield chunk
 
-@app.post("/api/v4/buckets/data/{task_id}/chunked")
-async def put_data_chunked(
-    task_id:str,
-    request: Request,
-    # data:UploadFile,
-    # chunk_size:Annotated[Union[str,None], Header()]="10mb",
-    peer_id:Annotated[Union[str,None], Header()]=None,
-    # update:Annotated[Union[int,None], Header()] = 0
-):
-    # if update:
-        
-    start_time = T.time()
-    try:
-        task_maybe = await tm.get_task(task_id=task_id)
-        if task_maybe.is_err:
-            raise task_maybe.unwrap_err()
-        
-        task = task_maybe.unwrap()
-
-        # async with peer_healer_rwlock.writer_lock: 
-        #     if not peer_id:
-        #         peer = lb.lb(operation_type="put",algorithm=MICTLANX_ROUTER_LB_ALGORITHM)
-        #         if peer == None:
-        #             raise HTTPException(status_code=404, detail="No peers available")
-        #     else:
-        maybe_peer = await storage_peer_manager.get_peer_by_id(peer_id=task.peer_id)
-        if maybe_peer.is_none:
-            raise HTTPException(status_code=404, detail="No peers available")
-        else:
-            peer = maybe_peer.unwrap()
-
-        headers= {}
-        # chunks = data_by_chunks(data=data,chunk_size=chunk_size)
-        # chunks = request.str
-        # chunks = data_by_chunksv2(data=request,chunk_size=chunk_size)
-        chunks = request.stream()
-        result = await peer.put_chuncked_async(task_id=task_id, chunks = chunks,headers=headers)
-        # result = peer.put_data(task_id=task_id,key="",value=value,content_type="application/octet-stream",headers=headers)
-        # res:task_idult = None
-        if result.is_err:
-            raise result.unwrap_err()
-
-        response = result.unwrap()
-        res = await tm.delete_task(task_id=task_id)
-        log.info({
-            "event":"PUT.CHUNKED",
-            "bucket_id":task.bucket_id,
-            "key":task.key,
-            "size":task.size,
-            "task_id":task_id,
-            "peer_id":task.peer_id,
-            "content_type":task.content_type,
-            "deleted_tasks":res.is_ok,
-            "service_time":T.time() - start_time
-        })
-
-        return JSONResponse(content=jsonable_encoder(response))
-
-    except HTTPException as e:
-        log.error({
-            "event":"HTTP.EXCEPTION",
-            "detail":e.detail,
-            "status_code":e.status_code
-        })
-        return HTTPException(status_code=500, detail = str(e))
-    except R.exceptions.HTTPError as e:
-        detail = str(e.response.content.decode("utf-8") )
-        # e.response.reason
-        status_code = e.response.status_code
-        log.error({
-            "event":"HTTPError",
-            "detail":detail,
-            "status_code":status_code,
-            "reason":e.response.reason,
-        })
-        raise HTTPException(status_code=status_code, detail=detail  )
-    except R.exceptions.ConnectionError as e:
-        detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-        log.error({
-            "event":"CONNECTION.ERROR",
-            "detail":detail,
-            "status_code":500
-        })
-        raise HTTPException(status_code=500, detail=detail  )
-    except Exception as e:
-        log.error({
-            "event":"EXCEPTION",
-            "detail":str(e),
-            "status_code":500
-        })
-        return HTTPException(status_code=500, detail = str(e))
-
 
 
 
@@ -1614,6 +1645,7 @@ async def get_replica_map(start:int =0, end:int = 0):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))   
+
 @app.delete("/api/v4/tasks")
 async def delete_all_tasks():
     try:
@@ -1626,11 +1658,31 @@ async def delete_all_tasks():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))   
 
-# if __name__ =="__main__":
-#     uvicorn.run(
-#         host=MICTLANX_ROUTER_HOST,
-#         port=MICTLANX_ROUTER_PORT,
-#         reload=MICTLANX_ROUTER_RELOAD,
-#         app="server:app",
-#         workers= MICTLANX_ROUTER_MAX_WORKERS
-#     )
+# Support endpoints
+@app.post("/mtx/u/rm")
+async def rm_update_params(req:Request):
+    try:
+        json_body = await req.json()
+        await replica_manager.update_params(**json_body)
+        params = await replica_manager.get_params()
+        return JSONResponse(
+            content= jsonable_encoder(
+                params
+            )
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))   
+@app.post("/mtx/u/spm")
+async def spm_update_params(req:Request):
+    try:
+        json_body = await req.json()
+        await storage_peer_manager.update_params(**json_body)
+        params = await storage_peer_manager.get_params()
+        return JSONResponse(
+            content=jsonable_encoder(
+                params
+            )
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))   
