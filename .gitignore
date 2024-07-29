@@ -2,3 +2,4 @@ mictlanx-fm/
 xolo-api.yml
 **/**/__pycache__/*
 *.tar.gz
+*.lock

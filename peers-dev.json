@@ -1,7 +1,7 @@
 {
     "mictlanx-peer-0": {
         "container_id": "mictlanx-peer-0",
-        "image": "nachocode/mictlanx:peer",
+        "image": "nachocode/mictlanx:peer-0.0.159",
         "hostname": "mictlanx-peer-0",
         "exposed_ports": [
             {
@@ -27,7 +27,8 @@
             "MAX_INTERVAL_TIME": "20",
             "WORKERS": "4",
             "ELASTIC": "true",
-            "NODE_IP_ADDR": "0.0.0.0"
+            "NODE_IP_ADDR": "0.0.0.0",
+            "PEERS": ""
         },
         "memory": 4294967296,
         "cpu_count": 2,
@@ -57,7 +58,7 @@
     },
     "mictlanx-peer-1": {
         "container_id": "mictlanx-peer-1",
-        "image": "nachocode/mictlanx:peer",
+        "image": "nachocode/mictlanx:peer-0.0.159",
         "hostname": "mictlanx-peer-1",
         "exposed_ports": [
             {
@@ -83,7 +84,8 @@
             "MAX_INTERVAL_TIME": "20",
             "WORKERS": "4",
             "ELASTIC": "true",
-            "NODE_IP_ADDR": "0.0.0.0"
+            "NODE_IP_ADDR": "0.0.0.0",
+            "PEERS": ""
         },
         "memory": 4000000000,
         "cpu_count": 2,
@@ -103,7 +105,7 @@
     },
     "mictlanx-peer-2": {
         "container_id": "mictlanx-peer-2",
-        "image": "nachocode/mictlanx:peer",
+        "image": "nachocode/mictlanx:peer-0.0.159",
         "hostname": "mictlanx-peer-2",
         "exposed_ports": [
             {
@@ -129,7 +131,8 @@
             "MAX_INTERVAL_TIME": "20",
             "WORKERS": "4",
             "ELASTIC": "true",
-            "NODE_IP_ADDR": "0.0.0.0"
+            "NODE_IP_ADDR": "0.0.0.0",
+            "PEERS": ""
         },
         "memory": 4000000000,
         "cpu_count": 2,

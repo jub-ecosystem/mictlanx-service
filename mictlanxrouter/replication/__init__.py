@@ -13,10 +13,14 @@ from pydantic import BaseModel,Field
 from nanoid import generate as nanoid
 import string
 from dataclasses import dataclass
-from mictlanx.utils.index import Utils as MXUtils
+# from mictlanx.utils.index import Utils as MXUtils
 import json as J
 from enum import Enum
 import os 
+from opentelemetry.trace import Span,StatusCode,Status
+from opentelemetry.sdk.trace import Tracer
+
+
 MICTLANX_TIMEOUT = HF.parse_timespan(os.environ.get("MICTLANX_TIMEOUT","10s"))
 
 ALPHABET = string.digits + string.ascii_lowercase
@@ -148,8 +152,16 @@ class CreateReplicasResult(object):
 
 
 class ReplicaManager(object):
-    def __init__(self,q:asyncio.Queue,spm:StoragePeerManager,elastic:bool= True,show_logs:bool = True, params:Option[ReplicaManagerParams] = NONE  ):
+    def __init__(self,
+                 tracer:Tracer,
+                 q:asyncio.Queue,
+                 spm:StoragePeerManager,
+                 elastic:bool= True,
+                 show_logs:bool = True,
+                 params:Option[ReplicaManagerParams] = NONE, 
+    ):
         # <BucketID>@<Key> -> List[PeerId]
+        self.tracer:Tracer =tracer
         self.params = params.unwrap() if params.is_some else ReplicaManagerParams()
         self.q = q 
         self.elastic = elastic
@@ -230,12 +242,18 @@ class ReplicaManager(object):
 
     
     async def get_available_peers_ids(self,bucket_id:str,key:str,size:int=0):
-        _all_peers_ids = set(await self.spm.sorted_by_uf(size=size))
-        async with self.lock.reader_lock:
-            combined_key         = "{}@{}".format(bucket_id,key)
-            current_replicas = set(self.replica_map.setdefault(combined_key,[]))
-            result_list = [item for item in _all_peers_ids if item not in current_replicas]
-            return result_list
+        with self.tracer.start_as_current_span("rm.get.available.peers.ids") as span:
+            span:Span = span
+            _all_peers_ids = await self.spm.sorted_by_uf(size=size)
+            span.add_event(name = "rm.spm.sorted_by_uf", attributes={"available_peer_ids": _all_peers_ids})
+            async with self.lock.reader_lock:
+                combined_key         = "{}@{}".format(bucket_id,key)
+                span.set_attributes({"combined_key": combined_key,"bucket_id":bucket_id, "key":key})
+                current_replicas = set(self.replica_map.setdefault(combined_key,[]))
+                result_list = [item for item in _all_peers_ids if item not in current_replicas]
+                span.add_event(name="rm.current_replicas", attributes={"current_replicas":list(current_replicas)})
+                span.add_event(name="rm.filtered.available_replicas", attributes={"available_replicas":result_list })
+                return result_list
             # return list(_all_peers_ids.difference(current_replicas))
     async def get_available_peers(self,bucket_id:str,key:str)->List[InterfaceX.Peer]:
         try:
@@ -277,10 +295,13 @@ class ReplicaManager(object):
             return list(map(lambda x:x.unwrap(),filter(lambda mr:mr.is_some, maybe_replicas)))
 
     async def get_current_replicas_ids(self,bucket_id:str, key:str)->List[str]:
-        combined_key    = "{}@{}".format(bucket_id,key)
-        async with self.lock.reader_lock:
-            replicas = self.replica_map.get(combined_key,[])
-            return replicas
+        with self.tracer.start_as_current_span("rm.get.current.replicas.ids") as span:
+            span:Span = span
+            combined_key    = "{}@{}".format(bucket_id,key)
+            async with self.lock.reader_lock:
+                replicas = self.replica_map.get(combined_key,[])
+                span.set_attributes({"bucket_id":bucket_id, "key":key, "replicas":replicas})
+                return replicas
           
     async def __create_replicas(self,bucket_id:str,key:str,replica_peer_ids:List[str]=[]):
         combined_key       = "{}@{}".format(bucket_id,key)
@@ -296,219 +317,264 @@ class ReplicaManager(object):
                 # self.key_replicas.get("{}@{}".format(bucket_id,key),[]))
             return current
     async def create_replicas(self, bucket_id:str,key:str,size:int=0,rf:int = 1, peer_ids:List[str]=[])->CreateReplicasResult :
-
-        # peer_ids = list(set(peer_ids))
-        start_time = T.time()
-        available_peer_ids = await self.get_available_peers_ids(
-            bucket_id=bucket_id,
-            key=key,
-            size=size
-        )
-        # print("AVAILABLE_PEERS_ID",available_peer_ids)
-        if len(available_peer_ids) ==0:
-            return CreateReplicasResult.empty(
-                bucket_id=bucket_id,
-                key=key
-            )
-        # print("AVAILABLE", available_placement_peer_ids_replicas)
-        # CR = [p1,p2]   rf = 2
-        # TR = [p1,p2,p3] rf = 3
-        
-        n_selected_peers              = len(peer_ids)
-        n_available_peers             = len(available_peer_ids)
-        current_replicas_ids          = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-        target_selected_peers_ids = list(filter(lambda x:  not x in current_replicas_ids, peer_ids))
-        
-        current_rf                          = len(current_replicas_ids)
-        _rf                                  = rf if n_selected_peers == 0 else len(target_selected_peers_ids)
-        diff_rf                             = _rf - current_rf if _rf > current_rf else 0
-        if _rf <=  current_rf:
-            return CreateReplicasResult.empty(
+        with self.tracer.start_as_current_span("rm.create.replicas") as span:
+            span:Span          = span
+            start_time         = T.time()
+            available_peer_ids = await self.get_available_peers_ids(
                 bucket_id=bucket_id,
                 key=key,
-                current_replicas=current_replicas_ids
+                size=size
             )
+            
+            if len(available_peer_ids) ==0:
+                return CreateReplicasResult.empty(
+                    bucket_id=bucket_id,
+                    key=key
+                )
+            # print("AVAILABLE", available_placement_peer_ids_replicas)
+            # CR = [p1,p2]   rf = 2
+            # TR = [p1,p2,p3] rf = 3
+            
+            n_selected_peers              = len(peer_ids)
+            n_available_peers             = len(available_peer_ids)
+            current_replicas_ids          = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+            target_selected_peers_ids = list(filter(lambda x:  not x in current_replicas_ids, peer_ids))
+            
+            current_rf                          = len(current_replicas_ids)
+            _rf                                  = rf if n_selected_peers == 0 else len(target_selected_peers_ids)
+            diff_rf                             = _rf - current_rf if _rf > current_rf else 0
+            if _rf <=  current_rf:
+                return CreateReplicasResult.empty(
+                    bucket_id=bucket_id,
+                    key=key,
+                    current_replicas=current_replicas_ids
+                )
 
-        self.__log.debug({
-            "event":"CREATE.REPLICA.SHOW",
-            "bucket_id":bucket_id,
-            "key":key,
-            "size":size,
-            "rf":_rf,
-            "current_rf":current_rf,
-            "diff_rf":diff_rf,
-            "current_replicas":current_replicas_ids,
-            "available_peers": available_peer_ids,
-            "n_available_peers":n_available_peers,
-            "selected_peers":peer_ids
-        })
-        if  diff_rf == 0:
-            replicas  = set(peer_ids).union(set(current_replicas_ids))
-            self.__log.info({
-                "event":"REPLICATION.FACTOR.REACHED",
+            span.set_attributes({
                 "bucket_id":bucket_id,
                 "key":key,
+                "size":size,
+                "rf":_rf,
                 "current_rf":current_rf,
-                "target_rf":_rf,
+                "diff_rf":diff_rf,
+                "current_replicas":current_replicas_ids,
+                "available_peers":available_peer_ids,
+                "n_available_peers":n_available_peers,
+                "selected_peers":peer_ids
             })
-            return CreateReplicasResult(
-                bucket_id=bucket_id,
-                key=key,
-                success_replicas=[],
-                failed_replicas=[],
-                available_replicas=available_peer_ids,
-                no_found_peers=[],
-                replicas=current_replicas_ids
-            )
-        
-
-        # No selected peers and RF is lower than the number of available peers
-        if n_selected_peers == 0 and diff_rf <= n_available_peers:
-            replica_peer_ids = available_peer_ids[:diff_rf]
-            x = await self.__create_replicas(
-                bucket_id=bucket_id,
-                key=key,
-                replica_peer_ids=replica_peer_ids
-            )
-            replicas = list(set(current_replicas_ids+ replica_peer_ids))
-            self.__log.info({
-                    "event":"CREATE.REPLICAS",
+         
+            if  diff_rf == 0:
+                replicas  = set(peer_ids).union(set(current_replicas_ids))
+                span.add_event(name="replication.factor.reached", attributes={
                     "bucket_id":bucket_id,
                     "key":key,
-                    "index":0,
-                    "replicas":replicas,
-                    "response_time":T.time() - start_time
-            })
-            return CreateReplicasResult(
-                bucket_id          = bucket_id,
-                key                = key,
-                replicas           = replicas,
-                success_replicas   = replica_peer_ids,
-                available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
-                failed_replicas    = [],
-                no_found_peers     = []
-            )
-        # No selected peers and RF is greater than number of availabler peers
-        elif n_selected_peers ==0  and diff_rf > n_available_peers:
-            if self.elastic:
-                res = await self.spm.active_deploy_peers(rf=diff_rf - n_available_peers)
-                replicas = list(set(current_replicas_ids+res.success_peers))
-                # res.success_peers
-                x = await self.__create_replicas(bucket_id=bucket_id,key=key, replica_peer_ids=replicas)
-                self.__log.info({
-                        "event":"CREATE.REPLICAS",
-                        "bucket_id":bucket_id,
-                        "key":key,
-                        "index":1,
-                        "replicas":replicas,
-                        "response_time":T.time() - start_time
-                })
-                return CreateReplicasResult(
-                    bucket_id=bucket_id,
-                    key= key,
-                    replicas=replicas,
-                    failed_replicas=res.failed_peers,
-                    available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
-                    success_replicas=res.success_peers,
-
-                )
-            else:
-                self.__log.info({
-                        "event":"CREATE.REPLICAS",
-                        "bucket_id":bucket_id,
-                        "key":key,
-                        "index":1,
-                        "replicas":current_replicas_ids,
-                        "response_time":T.time() - start_time
-                })
-                return CreateReplicasResult(
-                    bucket_id=bucket_id,
-                    key= key,
-                    replicas=current_replicas_ids,
-                )
-            
-        elif n_selected_peers >=1 and diff_rf <= n_available_peers:
-            # if diff_rf <= n_selected_peers:
-            selected_peers     = await self.spm.from_peer_ids_to_peers(peer_ids=target_selected_peers_ids)
-            _selected_peer_ids = set(list(map(lambda p: p.peer_id, selected_peers)))
-
-            new_replicas_peer_ids = _selected_peer_ids.difference(set(current_replicas_ids)) 
-            new_current_replicas = new_replicas_peer_ids.union(current_replicas_ids)
-
-            replica_peer_ids = list(new_current_replicas)
-            create_replicas_result = await self.__create_replicas(bucket_id=bucket_id,key=key,replica_peer_ids=replica_peer_ids)
-
-            self.__log.info({
-                    "event":"CREATE.REPLICAS",
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "index":2,
-                    "replicas":replica_peer_ids,
-                    "response_time":T.time() - start_time
-            })
-            return CreateReplicasResult(
-                bucket_id=bucket_id,
-                key=key,
-                available_replicas=await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
-                failed_replicas=[],
-                no_found_peers=[],
-                replicas=await self.get_current_replicas_ids(bucket_id=bucket_id,key=key),
-                success_replicas=replica_peer_ids,
-            )
-           
-            # else:
-            #     # available_replicas = self.get_available_peers_ids(bucket_id=bucket_id,key=key)
-            #     # replicas           =  await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-            #     self.__log.warning({
-            #         "event":"ELASTICITY.DEACTIVATED",
-            #         "bucket_id":bucket_id,
-            #         "key":key,
-            #         "available_replicas":available_peer_ids,
-            #         "replicas":current_replicas_ids
-            #     })
-            #     return CreateReplicasResult(
-            #         bucket_id=bucket_id,
-            #         key=key,
-            #         available_replicas=available_peer_ids,
-            #         failed_replicas=[],
-            #         no_found_peers= [],
-            #         replicas=replicas,
-            #         success_replicas=[]
-            #     )
-                # print("ELASTIC_SECOND")
-        elif n_selected_peers >=1  and diff_rf > n_available_peers:
-            if not self.elastic:
-                self.__log.info({
-                    "event":"CREATE.REPLICAS",
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "index":3,
-                    "replicas":[],
-                    "response_time":T.time() - start_time
+                    "current_rf":current_rf,
+                    "target_rf":_rf
                 })
                 return CreateReplicasResult(
                     bucket_id=bucket_id,
                     key=key,
-                    available_replicas=[],
+                    success_replicas=[],
                     failed_replicas=[],
+                    available_replicas=available_peer_ids,
                     no_found_peers=[],
                     replicas=current_replicas_ids
                 )
-            else:
-                self.__log.info({
-                    "event":"CREATE.REPLICAS",
+            
+
+            # No selected peers and RF is lower than the number of available peers
+            if n_selected_peers == 0 and diff_rf <= n_available_peers:
+                replica_peer_ids = available_peer_ids[:diff_rf]
+                # ____________________________________
+                x = await self.__create_replicas(
+                    bucket_id=bucket_id,
+                    key=key,
+                    replica_peer_ids=replica_peer_ids
+                )
+                # UPDATE UFS
+                await self.spm.puts(peer_ids=replica_peer_ids, size = size)
+                replicas = list(set(current_replicas_ids+ replica_peer_ids))
+                __available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key)
+                span.add_event(name="create.replicas.successfully", attributes={
                     "bucket_id":bucket_id,
                     "key":key,
-                    "index":3,
-                    "replicas":current_replicas_ids,
-                    "response_time":T.time() - start_time
+                    "n_selected_peer"
+                    "selected_replicas":replica_peer_ids,
+                    "replicas":replicas,
+                    "available_peers":__available_replicas,
+                    "n_selected_peers":n_selected_peers,
+                    "diff_rf":diff_rf,
+                    "n_available_peers":n_selected_peers,
+                    "available_peers":available_peer_ids,
+                    "selected_peers":peer_ids
+                    # "failed_replicas":[],
+                    # "no_found_peers":[]
                 })
-                return CreateReplicasResult.empty(bucket_id=bucket_id,key=key, current_replicas=current_replicas_ids)
+                # self.__log.info({
+                #         "event":"CREATE.REPLICAS",
+                #         "bucket_id":bucket_id,
+                #         "key":key,
+                #         "index":0,
+                #         "replicas":replicas,
+                #         "response_time":T.time() - start_time
+                # })
+                return CreateReplicasResult(
+                    bucket_id          = bucket_id,
+                    key                = key,
+                    replicas           = replicas,
+                    success_replicas   = replica_peer_ids,
+                    available_replicas = __available_replicas,
+                    failed_replicas    = [],
+                    no_found_peers     = []
+                )
+            # No selected peers and RF is greater than number of availabler peers
+            elif n_selected_peers ==0  and diff_rf > n_available_peers:
+                if self.elastic:
+                    res = await self.spm.active_deploy_peers(rf=diff_rf - n_available_peers)
+                    replicas = list(set(current_replicas_ids+res.success_peers))
+                    # res.success_peers
+                    x = await self.__create_replicas(bucket_id=bucket_id,key=key, replica_peer_ids=replicas)
+                    # self.__log.info({
+                    #         "event":"CREATE.REPLICAS",
+                    #         "bucket_id":bucket_id,
+                    #         "key":key,
+                    #         "index":1,
+                    #         "replicas":replicas,
+                    #         "response_time":T.time() - start_time
+                    # })
+                    span.add_event(name="create.replicas.successfully", attributes={
+                        "bucket_id":bucket_id,
+                        "key":key,
+                        "n_selected_peer"
+                        "selected_replicas":replica_peer_ids,
+                        "replicas":replicas,
+                        "n_selected_peers":n_selected_peers,
+                        "diff_rf":diff_rf,
+                        "n_available_peers":n_available_peers,
+                        "available_peers":available_peer_ids,
+                        "selected_peers":peer_ids
+                    })
+                    return CreateReplicasResult(
+                        bucket_id=bucket_id,
+                        key= key,
+                        replicas=replicas,
+                        failed_replicas=res.failed_peers,
+                        available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
+                        success_replicas=res.success_peers,
+
+                    )
+                else:
+                    # self.__log.info({
+                    #         "event":"CREATE.REPLICAS",
+                    #         "bucket_id":bucket_id,
+                    #         "key":key,
+                    #         "index":1,
+                    #         "replicas":current_replicas_ids,
+                    #         "response_time":T.time() - start_time
+                    # })
+                    return CreateReplicasResult(
+                        bucket_id=bucket_id,
+                        key= key,
+                        replicas=current_replicas_ids,
+                    )
+                
+            elif n_selected_peers >=1 and diff_rf <= n_available_peers:
+                # if diff_rf <= n_selected_peers:
+                selected_peers     = await self.spm.from_peer_ids_to_peers(peer_ids=target_selected_peers_ids)
+                _selected_peer_ids = set(list(map(lambda p: p.peer_id, selected_peers)))
+
+                new_replicas_peer_ids = _selected_peer_ids.difference(set(current_replicas_ids)) 
+                new_current_replicas = new_replicas_peer_ids.union(current_replicas_ids)
+
+                replica_peer_ids = list(new_current_replicas)
+                create_replicas_result = await self.__create_replicas(bucket_id=bucket_id,key=key,replica_peer_ids=replica_peer_ids)
+                replicas = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+
+                span.add_event(name="create.replicas.successfully", attributes={
+                    "bucket_id":bucket_id,
+                    "key":key,
+                    "n_selected_peer"
+                    "selected_replicas":replica_peer_ids,
+                    "replicas":replicas,
+                    "n_selected_peers":n_selected_peers,
+                    "diff_rf":diff_rf,
+                    "n_available_peers":n_available_peers,
+                    "available_peers":available_peer_ids,
+                    "selected_peers":peer_ids
+                })
+                # self.__log.info({
+                #         "event":"CREATE.REPLICAS",
+                #         "bucket_id":bucket_id,
+                #         "key":key,
+                #         "index":2,
+                #         "replicas":replica_peer_ids,
+                #         "response_time":T.time() - start_time
+                # })
+                return CreateReplicasResult(
+                    bucket_id=bucket_id,
+                    key=key,
+                    available_replicas=await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
+                    failed_replicas=[],
+                    no_found_peers=[],
+                    replicas=replicas,
+                    success_replicas=replica_peer_ids,
+                )
+            
+                # else:
+                #     # available_replicas = self.get_available_peers_ids(bucket_id=bucket_id,key=key)
+                #     # replicas           =  await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+                #     self.__log.warning({
+                #         "event":"ELASTICITY.DEACTIVATED",
+                #         "bucket_id":bucket_id,
+                #         "key":key,
+                #         "available_replicas":available_peer_ids,
+                #         "replicas":current_replicas_ids
+                #     })
+                #     return CreateReplicasResult(
+                #         bucket_id=bucket_id,
+                #         key=key,
+                #         available_replicas=available_peer_ids,
+                #         failed_replicas=[],
+                #         no_found_peers= [],
+                #         replicas=replicas,
+                #         success_replicas=[]
+                #     )
+                    # print("ELASTIC_SECOND")
+            elif n_selected_peers >=1  and diff_rf > n_available_peers:
+                if not self.elastic:
+                    # self.__log.info({
+                    #     "event":"CREATE.REPLICAS",
+                    #     "bucket_id":bucket_id,
+                    #     "key":key,
+                    #     "index":3,
+                    #     "replicas":[],
+                    #     "response_time":T.time() - start_time
+                    # })
+                    span.add_event(name="elasticity.disabled",attributes={"bucket_id":bucket_id,"key":key})
+                    return CreateReplicasResult(
+                        bucket_id=bucket_id,
+                        key=key,
+                        available_replicas=[],
+                        failed_replicas=[],
+                        no_found_peers=[],
+                        replicas=current_replicas_ids
+                    )
+                else:
+                    span.add_event(name="create.replicas.elastically", attributes={"bucket_id":bucket_id,"key":key})
+                    # self.__log.info({
+                    #     "event":"CREATE.REPLICAS",
+                    #     "bucket_id":bucket_id,
+                    #     "key":key,
+                    #     "index":3,
+                    #     "replicas":current_replicas_ids,
+                    #     "response_time":T.time() - start_time
+                    # })
+                    return CreateReplicasResult.empty(bucket_id=bucket_id,key=key, current_replicas=current_replicas_ids)
                 # print("ELASTIC WITH SELECTEd")
 
         
 
-class Status(Enum):
+class ReplicationTaskStatus(Enum):
     PENDING = "Pending"
     IN_PROGRESS = "In Progress"
     COMPLETED = "Completed"
@@ -528,7 +594,7 @@ class ReplicationTask(object):
                  strategy:str="ACTIVE",
                  index:int =0,
                  prev_task_id:str ="",
-                 status:Status = Status.PENDING,
+                 status:ReplicationTaskStatus = ReplicationTaskStatus.PENDING,
                  detail:str="",
                  replicas:List[str]=[],force:bool = False
     ):
@@ -550,18 +616,18 @@ class ReplicationTask(object):
         self.force        = force
     
     def set_pending(self):
-        self.status= Status.PENDING
+        self.status= ReplicationTaskStatus.PENDING
     def set_in_progress(self):
-        self.status = Status.IN_PROGRESS
+        self.status = ReplicationTaskStatus.IN_PROGRESS
     def set_completed(self):
-        self.status = Status.COMPLETED
+        self.status = ReplicationTaskStatus.COMPLETED
     def set_failed(self):
-        self.status= Status.FAILED
+        self.status= ReplicationTaskStatus.FAILED
     def set_cancelled(self):
-        self.status= Status.CANCELLED
+        self.status= ReplicationTaskStatus.CANCELLED
 
 
-    def link_task(self,status:Status = Status.PENDING, detail:str="")->'ReplicationTask':
+    def link_task(self,status:ReplicationTaskStatus = ReplicationTaskStatus.PENDING, detail:str="")->'ReplicationTask':
         return ReplicationTask(
             bucket_id=self.bucket_id,
             key=self.key,
@@ -578,6 +644,10 @@ class ReplicationTask(object):
             # detail=self.detail
         )
 
+    def to_dict(self):
+        x = self.__dict__.copy()
+        x["status"] = str(x.get("status","PENDING"))
+        return x
     @staticmethod
     def from_replication_event(x:'ReplicationEvent'):
         return ReplicationTask(
@@ -605,21 +675,21 @@ class ReplicationTasks(object):
         task.index = self.n
         if self.last_task.is_some:
             _last_task = self.last_task.unwrap()
-            if _last_task.status == Status.CANCELLED:
+            if _last_task.status == ReplicationTaskStatus.CANCELLED:
                 return Err(Exception("Task is already cancelled."))
-            elif _last_task.status == Status.COMPLETED:
+            elif _last_task.status == ReplicationTaskStatus.COMPLETED:
                 return Err(Exception("Task is already completed."))
-            elif _last_task.status == Status.IN_PROGRESS and task.status == Status.COMPLETED:
+            elif _last_task.status == ReplicationTaskStatus.IN_PROGRESS and task.status == ReplicationTaskStatus.COMPLETED:
                 pass
-            elif _last_task.status == Status.IN_PROGRESS and task.status == Status.CANCELLED:
+            elif _last_task.status == ReplicationTaskStatus.IN_PROGRESS and task.status == ReplicationTaskStatus.CANCELLED:
                 pass
-            elif _last_task.status == Status.IN_PROGRESS and task.status == Status.FAILED:
+            elif _last_task.status == ReplicationTaskStatus.IN_PROGRESS and task.status == ReplicationTaskStatus.FAILED:
                 pass
 
             # elif 
         else:
-            if not task.status == Status.PENDING:
-                return Err(Exception("Invalid initial status: {} != {}".format(task.status, Status.PENDING)))
+            if not task.status == ReplicationTaskStatus.PENDING:
+                return Err(Exception("Invalid initial status: {} != {}".format(task.status, ReplicationTaskStatus.PENDING)))
             self.last_task = Some(task)
             self.start_at  = T.time()
         # _______________________________
@@ -682,8 +752,8 @@ class ReplicationProcessResponse:
 
 class DataReplicator:
     def __init__(self,
+        tracer:Tracer,
         queue:asyncio.Queue,
-        # ph:StoragePeerManager,
         rm:ReplicaManager,
         strategy:str = "FLOOD",
         strategy_mode:str="STATIC",
@@ -694,6 +764,7 @@ class DataReplicator:
     ) -> None:
         
         self.is_running = True
+        self.tracer = tracer
         self.q = queue
         # self.ph = ph
         self.api_version = 4
@@ -725,8 +796,8 @@ class DataReplicator:
             tasks_map = await self.get_tasks()
             for k, tasks in tasks_map.items():
                 bucket_id, key = k.split("@")
-                is_not_completed = next(filter(lambda t: t.status == Status.COMPLETED, tasks),None)
-                fails = list(filter(lambda t:t.status == Status.FAILED, tasks))
+                is_not_completed = next(filter(lambda t: t.status == ReplicationTaskStatus.COMPLETED, tasks),None)
+                fails = list(filter(lambda t:t.status == ReplicationTaskStatus.FAILED, tasks))
                 n_fails = len(fails)
                 maybe_latest_task = await self.get_current_task(bucket_id=bucket_id,key=key)
                 if maybe_latest_task.is_none:
@@ -742,7 +813,7 @@ class DataReplicator:
                     # await self.remove_task(bucket_id=bucket_id,key=key)
                     continue
                 elif n_fails >= self.max_fails:
-                    x = latest_task.link_task(status=Status.CANCELLED, detail="Max number of fails reached.")
+                    x = latest_task.link_task(status=ReplicationTaskStatus.CANCELLED, detail="Max number of fails reached.")
                     _tasks = tasks.copy()
                     _tasks.append(x)
                     self.completed_tasks.setdefault(k, _tasks)
@@ -756,12 +827,12 @@ class DataReplicator:
                     continue
                     
 
-                maybe_task = await self.move_task(bucket_id=bucket_id, key=key,status=Status.PENDING, detail="Try to recover.")
+                maybe_task = await self.move_task(bucket_id=bucket_id, key=key,status=ReplicationTaskStatus.PENDING, detail="Try to recover.")
                 if maybe_task.is_none:
                     continue
                 task = maybe_task.unwrap()
                 
-                revent = ReplicationEvent.from_replication_task(x = task.link_task(status=Status.PENDING))
+                revent = ReplicationEvent.from_replication_task(x = task.link_task(status=ReplicationTaskStatus.PENDING))
                 revent.force = True
                 self.q.put_nowait(revent)
             return Ok(True)
@@ -786,67 +857,93 @@ class DataReplicator:
         async with self.lock.reader_lock:
             return self.tasks_map
     async def remove_task(self,bucket_id:str,key:str)->List[ReplicationTask]:
-        async with self.lock.writer_lock:
-            ckey = "{}@{}".format(bucket_id, key)
-            if ckey in self.tasks_map:
-                x = self.tasks_map.pop(ckey)
-                return x
-            return []
+        with self.tracer.start_as_current_span("remove.task") as span:
+            span:Span=  span
+            async with self.lock.writer_lock:
+                ckey = "{}@{}".format(bucket_id, key)
+                if ckey in self.tasks_map:
+                    x = self.tasks_map.pop(ckey)
+                    span.add_event(name="task.found", attributes={"bucket_id":bucket_id,"key":key, "n_tasks":len(x)})
+                    return x
+                span.add_event(name="task.not.found", attributes={"bucket_id":bucket_id,"key":key})
+                return []
     async def put_task(self, event:ReplicationEvent):
         # async with self.lock.writer_lock:
             # task = ReplicationTask.from_replication_event(x= event)
             # self.tasks.append(task)
         self.q.put_nowait(event)
     async def __replicate(self,bucket_id:str,key:str, peer:InterfaceX.Peer):
-        start_time = T.time()
-        x          = peer.replicate(bucket_id=bucket_id,key=key,timeout=60,headers={})
-        if x.is_err:
-            self.__log.error({
-                "event":"REPLICATE.FAILED",
-                "msg":str(x.unwrap_err())
-            })
-            return False
-        else:
-            self.__log.info({
-                "event":"REPLICATED",
-                "bucket_id":bucket_id,
-                "key":key,
-                "peer_id":peer.peer_id,
-                "strategy":self.strategy,
-                "mode":self.strategy_mode,
-                "ok":x.is_ok,
-                "response_time": T.time() - start_time,
-            })
+        with self.tracer.start_as_current_span("dr.replicate") as span:
+            span:Span = span
+            # start_time = T.time()
+            x          = peer.replicate(bucket_id=bucket_id,key=key,timeout=60,headers={})
+            if x.is_err:
+                span.add_event(name="replicate.failed", attributes={"bucket_id":bucket_id,"key":key,"peer_id":peer.peer_id})
+                # self.__log.error({
+                #     "event":"REPLICATE.FAILED",
+                #     "msg":str(x.unwrap_err())
+                # })
+                return False
+            else:
+                # self.__log.info({
+                #     "event":"REPLICATED",
+                #     "bucket_id":bucket_id,
+                #     "key":key,
+                #     "peer_id":peer.peer_id,
+                #     "strategy":self.strategy,
+                #     "mode":self.strategy_mode,
+                #     "ok":x.is_ok,
+                #     "response_time": T.time() - start_time,
+                # })
+                span.add_event(name="replicate.completed", attributes={"bucket_id":bucket_id,"key":key,"peer_id":peer.peer_id})
 
-            return True
+                return True
 
 
     async def add_task(self,task:ReplicationTask)->Option[str]:
-        async with self.lock.writer_lock:
-            if not task.replication_event_id in self.tasks_map:
-                self.tasks_map.setdefault(task.replication_event_id,[])
-                self.tasks_map[task.replication_event_id].append(task)
-                return Some(task.replication_event_id)
-            return NONE
-    async def move_task(self,bucket_id:str, key:str,status:Status,detail:str="")->Option[ReplicationTask]:
-        async with self.lock.writer_lock:
-            maybe_task = await self.get_current_task(bucket_id=bucket_id, key=key)
-            if maybe_task.is_some:
-                task = maybe_task.unwrap()
-                linked_task = task.link_task(status=status,detail=detail)
-                self.tasks_map[task.replication_event_id].append(linked_task)
-                return Some(linked_task)
-            return maybe_task
+        with self.tracer.start_as_current_span("dr.add.task") as span:
+            span:Span = span
+            async with self.lock.writer_lock:
+                if not task.replication_event_id in self.tasks_map:
+                    self.tasks_map.setdefault(task.replication_event_id,[])
+                    self.tasks_map[task.replication_event_id].append(task)
+                    span.add_event(name="dr.added.task",attributes={
+                        "n_tasks":len(self.tasks_map),
+                        **task.to_dict()
+                    })
+                    return Some(task.replication_event_id)
+                span.add_event(name="dr.task.exists",attributes={
+                    **task.to_dict()
+                })
+                return NONE
+    async def move_task(self,bucket_id:str, key:str,status:ReplicationTaskStatus,detail:str="")->Option[ReplicationTask]:
+        with self.tracer.start_as_current_span("dr.move.task") as span:
+            span:Span = span
+            async with self.lock.writer_lock:
+                maybe_task = await self.get_current_task(bucket_id=bucket_id, key=key)
+                if maybe_task.is_some:
+                    task = maybe_task.unwrap()
+                    linked_task = task.link_task(status=status,detail=detail)
+                    self.tasks_map[task.replication_event_id].append(linked_task)
+                    span.add_event(name="task.found", attributes={"bucket_id":bucket_id,"key":key,"detail":detail,"status":str(status), **task.to_dict() })
+                    return Some(linked_task)
+                span.add_event(name="task.not.found", attributes={"bucket_id":bucket_id,"key":key,"detail":detail,"status":str(status)})
+                return maybe_task
     async def get_current_task(self,bucket_id:str,key:str)->Option[ReplicationTask]:
-        async with self.lock.reader_lock:
-            ckey = "{}@{}".format(bucket_id,key)
-            if ckey in self.tasks_map:
-                tasks = self.tasks_map[ckey]
-                if len(tasks)==0:
-                    return NONE
-                last_task = max(tasks, key= lambda x: x.index)
-                return Some(last_task)
-            return NONE
+        with self.tracer.start_as_current_span("dr.get.current.task") as span:
+            span:Span = span
+            async with self.lock.reader_lock:
+                ckey = "{}@{}".format(bucket_id,key)
+                if ckey in self.tasks_map:
+                    tasks = self.tasks_map[ckey]
+                    if len(tasks)==0:
+                        span.add_event(name="task.not.found.empty", attributes={"ckey":ckey})
+                        return NONE
+                    last_task = max(tasks, key= lambda x: x.index)
+                    span.add_event(name="task.found", attributes={"ckey":ckey, **last_task.to_dict()})
+                    return Some(last_task)
+                span.add_event(name="task.not.found", attributes={"ckey":ckey})
+                return NONE
     async def replication_process(
         self,
         bucket_id:str,
@@ -857,213 +954,276 @@ class DataReplicator:
         replicated_peers_ids:List[str]=[]
     )->Result[ReplicationProcessResponse,Exception]:
         # replicas_subetset_from_available_peer_ids = set(replicated_peers_ids).difference(available_peers_ids)
-        available_peers_ids = list(set(available_peers_ids).difference(set(replicated_peers_ids)))
-        current_rf                                   = len(replicated_peers_ids)
-        ball_size                                    = 0
-        local_current_replicated_peers_ids:List[str] = replicated_peers_ids.copy()
-        self.__log.debug({
-            "event":"REPLICATION.PROCESS",
-            "available_peers":available_peers_ids,
-            "replicas":local_current_replicated_peers_ids,
-            "current_rf":current_rf,
-        })
-        # T.sleep(100)
-        # print("AVAIALBLE_PEER",available_peers_ids)
-        # print("CURRENT_RF",cur)
-        # available_peers_ids = self.rm.get_available_peers(bucket_id=bucket_id,key=key)
-        available_peers:List[InterfaceX.Peer] = []
-        for pid in available_peers_ids:
-            maybe_peer = await self.rm.spm.get_peer_by_id(peer_id= pid)
-            if maybe_peer.is_some:
-                available_peers.append(maybe_peer.unwrap())
-
-
-
-        diff_rf = rf - current_rf if rf > current_rf else 0
-        if diff_rf > len(available_peers):
-            return Err(Exception("Replication factor is greater than available peers."))
-        
-        self.__log.debug({
-            "event":"REPLICATION.PROCESS",
-            "bucket_id":bucket_id,
-            "key":key,
-            "current_rf":current_rf,
-            "target_rf":rf,
-            "diff_rf":diff_rf,
-            "available_peers":available_peers_ids,
-            "replicas":replicated_peers_ids,
-        })
-        # _rf = len(replicated_peers_ids)
-
-
-        for peer in available_peers[:diff_rf]:
-            get_size_result = peer.get_size(bucket_id=bucket_id, key=key, timeout=MICTLANX_TIMEOUT)
-            
-            if get_size_result.is_ok:
-                ball_size_response =get_size_result.unwrap()
-                ball_size =ball_size_response.size
-                
-                # No replica in this peer
-                if ball_size == 0:
-                    res = await self.__replicate(bucket_id=bucket_id, key=key, peer= peer)
-                    if res:
-                        current_rf+=1
-                        local_current_replicated_peers_ids.append(peer.peer_id)
-                    continue
-                else:
-                    self.__log.debug({
-                        "event":"REPLICA.EXISTS",
-                        "peer_id":peer.peer_id,
-                        "bucket_id":bucket_id,
-                        "key":key
-                    })
-                    local_current_replicated_peers_ids.append(peer.peer_id)
-                    current_rf+=1
-                    continue
-            else:
-                self.__log.error({
-                    "event":"GET.SIZE.FAILED",
-                    "peer_id":peer.peer_id,
-                    "msg":str(get_size_result.unwrap_err())
-                })
-                continue
-
-        rm_create_replicas = await self.rm.create_replicas(
-            bucket_id=bucket_id,
-            key=key,
-            peer_ids=local_current_replicated_peers_ids
-        )
-        
-        if len(rm_create_replicas.failed_replicas)>0:
-            self.__log.error({
-                "event":"REPLICATION.FAILED",
+        with self.tracer.start_as_current_span("dr.replication.process") as span:
+            span:Span                                    = span 
+            span.set_attributes({"bucket_id":bucket_id,"key":key,"rf":rf})
+            available_peers_ids                          = list(set(available_peers_ids).difference(set(replicated_peers_ids)))
+            current_rf                                   = len(replicated_peers_ids)
+            ball_size                                    = 0
+            local_current_replicated_peers_ids:List[str] = replicated_peers_ids.copy()
+            diff_rf = rf - current_rf if rf > current_rf else 0
+            # self.__log.debug({
+            #     "event":"REPLICATION.PROCESS",
+            #     "available_peers":available_peers_ids,
+            #     "replicas":local_current_replicated_peers_ids,
+            #     "current_rf":current_rf,
+            # })
+            span.add_event(name="replication.process.init",attributes={
+                "available": available_peers_ids,"current_rf":current_rf,
                 "bucket_id":bucket_id,
                 "key":key,
-                "failed": rm_create_replicas.failed_replicas
-            })
-                        
-        # _____________________________________________
-        left_replicas = rf-current_rf
-        event = "REPLICATION.UNCOMPLETED" if left_replicas >0 else "REPLICATION.COMPLETED"
-        self.__log.debug({
-            "event":event,
-            "current_rf":current_rf,
-            "rf":rf,
-            "left_replicas": left_replicas,
-            "peers": []
-            # "peers": len(self.ph.peers)
-        })
-        return Ok(ReplicationProcessResponse(
-            bucket_id=bucket_id,
-            key=key,
-            left_replicas=left_replicas,
-            combined_key_str="{}@{}".format(bucket_id,key),
-            replicas=local_current_replicated_peers_ids
-        ))
-    async def run(self,event:ReplicationEvent)->Result[ReplicationProcessResponse,Exception]:
-        try:
-            bucket_id            = event.bucket_id
-            key                  = event.key
-            combined_key         = event.get_combined_key_str()
-            replication_task     = ReplicationTask.from_replication_event(x =  event)
-
-            # Starts status in Pending
-            add_task_result = await  self.add_task(task=replication_task.link_task(status=Status.PENDING))
-            print("ADD_TASK_RESULT",add_task_result)
-            # Change status to In progress
-            maybe_replication_task = await self.move_task(bucket_id=bucket_id, key=key,status=Status.IN_PROGRESS)
-            print("MAYBE_REPLICATIOON_TASK",maybe_replication_task)
-            print("_"*50)
-            if add_task_result.is_none and not replication_task.force:
-                return Err(Exception("Replication task {} is already in queue.".format(replication_task.replication_event_id)))
-            elif replication_task.force:
-                if maybe_replication_task.is_none:
-                    await self.remove_task(bucket_id = replication_task.bucket_id, key = replication_task.key)
-                    return Exception("{}@{} no exists".format(replication_task.bucket_id, replication_task.key))
-                last_replication_task = maybe_replication_task.unwrap()
-            else:
-                last_replication_task = replication_task
-
-            available_peers_ids  = await self.rm.get_available_peers_ids(bucket_id=bucket_id,key=key)
-            replicated_peers_ids = await self.rm.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-            n_replicas = len(replicated_peers_ids)
-            diff_rf              = event.rf - n_replicas if event.rf > n_replicas else 0
-
-            if diff_rf == 0:
-                await self.remove_task(bucket_id = replication_task.bucket_id, key = replication_task.key)
-                return Ok(ReplicationProcessResponse(
-                        bucket_id=bucket_id,
-                        key=key,
-                        combined_key_str="{}@{}".format(bucket_id,key),
-                        left_replicas=0,
-                        replicas= replicated_peers_ids
-                    ) 
-                )
-
-            if len(replicated_peers_ids) ==0:
-                detail =  "{} not found".format(event.get_combined_key_str()) 
-                await self.move_task(bucket_id=bucket_id,key=key, status=Status.FAILED,detail=detail)
-                self.__log.error({
-                    "event":"REPLICA.NO.FOUND",
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "detail":detail,
-                })
-                return Err(Exception(detail))
-            
-            elif len(available_peers_ids) == 0 and not self.elastic:
-                detail = "No available peers.".format()
-                await self.move_task(bucket_id=bucket_id,key=key, status=Status.FAILED,detail=detail)
-                self.__log.error({
-                    "event":"NO.AVAILABLE.PEERS",
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "detail":detail,
-                })
-                return Err(Exception(detail))
-            
-            elif  diff_rf >= len(available_peers_ids) and not self.elastic:
-                detail ='Elasticity is disabled. No available peers to complete the replication task.' 
-                n_peers = await self.rm.spm.get_len_available_peers()
-                self.__log.error({
-                    "event":"ELASTICITY.DISABLED",
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "rf":event.rf,
-                    "n_available_peers":len(available_peers_ids),
-                    "elastic":self.elastic,
-                    "peers":n_peers,
-                    "target_peers": n_peers + (event.rf-len(replicated_peers_ids)),
-                    "detail":detail
-                })
-                await self.move_task(bucket_id=bucket_id,key=key, status=Status.FAILED,detail=detail)
-                return Err(Exception(detail))
-            
-            
-            
-            self.__log.debug({
-                "event":"DATA.REPLICATOR",
-                "combined_key":combined_key,
-                "bucket_id":bucket_id,
-                "key":key,
-                "available_peers":available_peers_ids,
-                "replica_peers":replicated_peers_ids,
+                "rf":rf,
+                "current_rf":current_rf,
+                "diff_rf":diff_rf,
+                "replicas":replicated_peers_ids
             })
             # T.sleep(100)
-            result = await self.replication_process(
+            # print("AVAIALBLE_PEER",available_peers_ids)
+            # print("CURRENT_RF",cur)
+            # available_peers_ids = self.rm.get_available_peers(bucket_id=bucket_id,key=key)
+            available_peers:List[InterfaceX.Peer] = []
+            for pid in available_peers_ids:
+                maybe_peer = await self.rm.spm.get_peer_by_id(peer_id= pid)
+                if maybe_peer.is_some:
+                    available_peers.append(maybe_peer.unwrap())
+            span.add_event(name="replication.process.available",attributes={
+                "availables":list(map(lambda x:x.peer_id, available_peers))
+            })
+
+
+
+
+            if diff_rf > len(available_peers):
+                detail = "Replication factor is greater than available peers."
+                span.set_status(status=Status(StatusCode.ERROR))
+                span.add_event(name="replica.process.failed",attributes={"detail":detail, "n_availables":len(available_peers), "rf":rf, "current_rf":current_rf,"diff_rf":diff_rf})
+                return Err(Exception(detail))
+            
+            # self.__log.debug({
+            #     "event":"REPLICATION.PROCESS",
+            #     "bucket_id":bucket_id,
+            #     "key":key,
+            #     "current_rf":current_rf,
+            #     "target_rf":rf,
+            #     "diff_rf":diff_rf,
+            #     "available_peers":available_peers_ids,
+            #     "replicas":replicated_peers_ids,
+            # })
+            # _rf = len(replicated_peers_ids)
+
+
+            for peer in available_peers[:diff_rf]:
+                get_size_result = peer.get_size(bucket_id=bucket_id, key=key, timeout=MICTLANX_TIMEOUT)
+                if get_size_result.is_ok:
+                    ball_size_response = get_size_result.unwrap()
+                    ball_size          = ball_size_response.size
+                    
+                    # No replica in this peer
+                    if ball_size == 0:
+                        res = await self.__replicate(bucket_id=bucket_id, key=key, peer= peer)
+                        if res:
+                            current_rf+=1
+                            local_current_replicated_peers_ids.append(peer.peer_id)
+                            span.add_event(
+                                name="replication.successfully", 
+                                attributes={"current_rf":current_rf, "replicas": local_current_replicated_peers_ids,"peer_id":peer.peer_id}
+                            )
+                        continue
+                    else:
+                        # self.__log.debug({
+                        #     "event":"REPLICA.EXISTS",
+                        #     "peer_id":peer.peer_id,
+                        #     "bucket_id":bucket_id,
+                        #     "key":key
+                        # })
+                        local_current_replicated_peers_ids.append(peer.peer_id)
+                        current_rf+=1
+                        span.add_event(name="replica.exists",attributes={"peer_id":peer.peer_id,"current_rf":current_rf,"replicas": local_current_replicated_peers_ids})
+                        continue
+                else:
+                    detail = str(get_size_result.unwrap_err())
+                    span.add_event(name="get.size.failed", attributes={"detail":detail,"peer_id": peer.peer_id})
+                    # self.__log.error({
+                    #     "event":"GET.SIZE.FAILED",
+                    #     "peer_id":peer.peer_id,
+                    #     "msg":str(get_size_result.unwrap_err())
+                    # })
+                    continue
+
+            rm_create_replicas = await self.rm.create_replicas(
                 bucket_id=bucket_id,
                 key=key,
-                rf= event.rf,
-                from_peer_id = event.pivot_peer_id, 
-                available_peers_ids = available_peers_ids,
-                replicated_peers_ids= replicated_peers_ids
+                peer_ids=local_current_replicated_peers_ids
             )
-            # if 
-            return result
-
-        except Exception as e:
-            self.__log.error({
-                "msg":str(e)
+            
+            if len(rm_create_replicas.failed_replicas)>0:
+                pass
+                # self.__log.error({
+                #     "event":"REPLICATION.FAILED",
+                #     "bucket_id":bucket_id,
+                #     "key":key,
+                #     "failed": rm_create_replicas.failed_replicas
+                # })
+                            
+            # _____________________________________________
+            left_replicas = rf-current_rf
+            # event = "REPLICATION.UNCOMPLETED" if left_replicas >0 else "REPLICATION.COMPLETED"
+            span.add_event(name="dr.replication.process.completed",attributes={
+                "bucket_id":bucket_id,
+                "key":key,
+                "left_replicas":left_replicas, 
+                "current_rf":current_rf,
+                "rf":rf,
+                "replicas":local_current_replicated_peers_ids
             })
-            return Err(e)
+            # self.__log.debug({
+            #     "event":event,
+            #     "current_rf":current_rf,
+            #     "rf":rf,
+            #     "left_replicas": left_replicas,
+            #     "peers": []
+            #     # "peers": len(self.ph.peers)
+            # })
+            return Ok(ReplicationProcessResponse(
+                bucket_id=bucket_id,
+                key=key,
+                left_replicas=left_replicas,
+                combined_key_str="{}@{}".format(bucket_id,key),
+                replicas=local_current_replicated_peers_ids
+            ))
+    async def run(self,event:ReplicationEvent)->Result[ReplicationProcessResponse,Exception]:
+        with self.tracer.start_as_current_span("dr.run") as span:
+            span:Span = span
+            bucket_id            = event.bucket_id
+            key                  = event.key
+            try:
+                combined_key         = event.get_combined_key_str()
+                replication_task     = ReplicationTask.from_replication_event(x =  event)
+
+                # Starts status in Pending
+                add_task_result = await  self.add_task(task=replication_task.link_task(status=ReplicationTaskStatus.PENDING))
+                # Change status to In progress
+                maybe_replication_task = await self.move_task(bucket_id=bucket_id, key=key,status=ReplicationTaskStatus.IN_PROGRESS)
+         
+                if add_task_result.is_none and not replication_task.force:
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    span.add_event(name="dr.task.exists", attributes={**replication_task.to_dict()})
+                    return Err(Exception("Replication task {} is already in queue.".format(replication_task.replication_event_id)))
+                elif replication_task.force:
+                    if maybe_replication_task.is_none:
+                        await self.remove_task(bucket_id = replication_task.bucket_id, key = replication_task.key)
+                        span.set_status(status=Status(StatusCode.ERROR))
+                        span.add_event(name="dr.task.not.found", attributes={"bucket_id":bucket_id, "key":key})
+                        return Exception("{}@{} no exists".format(replication_task.bucket_id, replication_task.key))
+                    last_replication_task = maybe_replication_task.unwrap()
+                else:
+                    last_replication_task = replication_task
+
+                available_peers_ids  = await self.rm.get_available_peers_ids(bucket_id=bucket_id,key=key)
+                replicated_peers_ids = await self.rm.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+                n_replicas           = len(replicated_peers_ids)
+                diff_rf              = event.rf - n_replicas if event.rf > n_replicas else 0
+                
+
+                span.add_event(name="dr.replication.init", attributes={"bucket_id":bucket_id,"key":key,"available": available_peers_ids,"current": replicated_peers_ids,"n_replicas":n_replicas,"diff_rf":diff_rf})
+
+
+
+
+                if diff_rf == 0:
+                    await self.remove_task(bucket_id = replication_task.bucket_id, key = replication_task.key)
+                    span.add_event(name="dr.replication.completed",attributes={"bucket_id":bucket_id,"key":key,"available": available_peers_ids,"current": replicated_peers_ids,"n_replicas":n_replicas,"diff_rf":diff_rf} )
+                    return Ok(
+                        ReplicationProcessResponse(
+                            bucket_id=bucket_id,
+                            key=key,
+                            combined_key_str="{}@{}".format(bucket_id,key),
+                            left_replicas=0,
+                            replicas= replicated_peers_ids
+                        ) 
+                    )
+
+                if len(replicated_peers_ids) ==0:
+                    detail =  "{} not found".format(event.get_combined_key_str()) 
+                    await self.move_task(bucket_id=bucket_id,key=key, status=ReplicationTaskStatus.FAILED,detail=detail)
+                    span.add_event(name="dr.task.not.found",attributes={"detail":detail,"bucket_id":bucket_id,"key":key,"available": available_peers_ids,"current": replicated_peers_ids,"n_replicas":n_replicas,"diff_rf":diff_rf })
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    # self.__log.error({
+                    #     "event":"REPLICA.NO.FOUND",
+                    #     "bucket_id":bucket_id,
+                    #     "key":key,
+                    #     "detail":detail,
+                    # })
+                    return Err(Exception(detail))
+                
+                elif len(available_peers_ids) == 0 and not self.elastic:
+                    detail = "No available peers.".format()
+                    await self.move_task(bucket_id=bucket_id,key=key, status=ReplicationTaskStatus.FAILED,detail=detail)
+                    span.add_event(name="dr.no.available.peers", attributes={
+                        "detail":detail,"bucket_id":bucket_id,"key":key,"available": available_peers_ids,"current": replicated_peers_ids,"n_replicas":n_replicas,"diff_rf":diff_rf 
+                    })
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    # self.__log.error({
+                    #     "event":"NO.AVAILABLE.PEERS",
+                    #     "bucket_id":bucket_id,
+                    #     "key":key,
+                    #     "detail":detail,
+                    # })
+                    return Err(Exception(detail))
+                
+                elif  diff_rf >= len(available_peers_ids) and not self.elastic:
+                    detail ='Elasticity is disabled. No available peers to complete the replication task.' 
+                    n_peers = await self.rm.spm.get_len_available_peers()
+                    
+                    span.add_event(name="dr.elasticity.disabled", attributes={
+                        "detail":detail,"bucket_id":bucket_id,"key":key,"available": available_peers_ids,"current": replicated_peers_ids,"n_replicas":n_replicas,"diff_rf":diff_rf 
+                    })
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    # self.__log.error({
+                    #     "event":"ELASTICITY.DISABLED",
+                    #     "bucket_id":bucket_id,
+                    #     "key":key,
+                    #     "rf":event.rf,
+                    #     "n_available_peers":len(available_peers_ids),
+                    #     "elastic":self.elastic,
+                    #     "peers":n_peers,
+                    #     "target_peers": n_peers + (event.rf-len(replicated_peers_ids)),
+                    #     "detail":detail
+                    # })
+                    await self.move_task(bucket_id=bucket_id,key=key, status=ReplicationTaskStatus.FAILED,detail=detail)
+                    return Err(Exception(detail))
+                
+                
+                
+                # self.__log.debug({
+                #     "event":"DATA.REPLICATOR",
+                #     "combined_key":combined_key,
+                #     "bucket_id":bucket_id,
+                #     "key":key,
+                #     "available_peers":available_peers_ids,
+                #     "replica_peers":replicated_peers_ids,
+                # })
+                # T.sleep(100)
+                result = await self.replication_process(
+                    bucket_id=bucket_id,
+                    key=key,
+                    rf= event.rf,
+                    from_peer_id = event.pivot_peer_id, 
+                    available_peers_ids = available_peers_ids,
+                    replicated_peers_ids= replicated_peers_ids
+                )
+                span.add_event(name="dr.completed", attributes={
+                    "bucket_id":bucket_id, 
+                    "key":key,
+                    "available_peers":available_peers_ids,
+                    "replica_peers":replicated_peers_ids,
+                    "ok":result.is_ok
+                })
+                # if 
+                return result
+
+            except Exception as e:
+                span.add_event(name="dr.exception", attributes={"bucket_id":bucket_id,"key":key,"detail":str(e)})
+                span.set_status(status=Status(StatusCode.ERROR))
+                return Err(e)
    

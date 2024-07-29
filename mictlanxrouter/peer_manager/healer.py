@@ -1,10 +1,10 @@
-
-
 import os
 import asyncio
 from mictlanx.logger.log import Log
 
+import json as J
 from mictlanxrouter.helpers.utils import Utils as RouterUtils
+from mictlanx.utils.index import Utils as MictlanXUtils
 from mictlanx.v4.interfaces.index import Peer,PeerStats
 from mictlanx.v4.interfaces.responses import PeerStatsResponse,GetUFSResponse
 import humanfriendly as HF
@@ -20,6 +20,9 @@ from mictlanx.v4.summoner.summoner import Summoner
 from mictlanx.interfaces.payloads import SummonContainerPayload,ExposedPort,MountX
 from mictlanx.interfaces.responses import SummonContainerResponse
 from dataclasses import dataclass
+from opentelemetry.trace import Span,Status,StatusCode
+from opentelemetry.sdk.trace import Tracer
+# from opentelemetry.sdk
 # import a
 @dataclass
 class DeployPeersResult:
@@ -44,7 +47,15 @@ class StoragePeerManagerParams(object):
         peers_config_path:str = "", 
         max_timeout_to_save_peer_config:str = "30min",
         peer_elastic:bool = True,
+        peer_docker_image:str = "nachocode/mictlanx:peer-0.0.159",
+        peer_min_interval_time:int = 5,
+        peer_max_interval_time:int = 20,
+        max_timeout_peers_handshake:str ="30s"
     ):
+        self.max_timeout_peers_handshake = max_timeout_peers_handshake
+        self.peer_min_interval_time = peer_min_interval_time
+        self.peer_max_interval_time = peer_max_interval_time
+        self.peer_docker_image = peer_docker_image
         self.peer_elastic = peer_elastic
         self.max_retries = max_retries
         self.max_idle_time = max_idle_time
@@ -86,6 +97,7 @@ class StoragePeerManagerParams(object):
                 setattr(self, key, value)
 class StoragePeerManager:
     def __init__(self,
+        tracer:Tracer,
         q:Queue,
         peers:List[Peer],
         summoner:Summoner,
@@ -109,7 +121,8 @@ class StoragePeerManager:
         summoner_mode: Mode of summoner (must be in the summoner object)
         max_recover_time_until_restart: default 5min if the peers not respond after 5mon the summoner restart the peers
         """
-        self.params = params.unwrap() if params.is_some else StoragePeerManagerParams()
+        self.tracer:Tracer = tracer
+        self.params        = params.unwrap() if params.is_some else StoragePeerManagerParams()
         self.max_timeout_to_save_peer_config = HF.parse_timespan(self.params.max_timeout_to_save_peer_config)
         self.debug        = self.params.debug
         self.peer_config_path =self.params.peers_config_path 
@@ -130,6 +143,7 @@ class StoragePeerManager:
         self.__peers_stats_responses:Dict[str, PeerStatsResponse] = {}
         self.max_timeout_to_recover = HF.parse_timespan(self.params.max_timeout_to_recover)
         self.last_recover_tick = T.time()
+        self.last_handshakes = T.time()
         self.last_to_save_peer_config = T.time()
         self.q= q
         self.completed_tasks:List[str] = []
@@ -153,6 +167,26 @@ class StoragePeerManager:
     async def get_params(self,)->StoragePeerManagerParams:
         async with self.params_lock.reader_lock:
             return self.params
+    async def puts(self, peer_ids:List[str], size:int=0):
+        async with self.lock.writer_lock:
+            for peer_id in peer_ids:
+                await self.put(peer_id=peer_id, size=size)
+    async def put(self,peer_id:str,size:int=0):
+        async with self.lock.writer_lock:
+            if peer_id in self.__peers_stats_responses:
+                current_p_stats = self.__peers_stats_responses[peer_id]
+                used = current_p_stats.used_disk
+
+                if current_p_stats.available_disk >= size and (used+size) <= current_p_stats.total_disk: 
+                    current_p_stats.used_disk+= size
+                    current_p_stats.available_disk-= size
+                    current_p_stats.disk_uf = MictlanXUtils.calculate_disk_uf(total=current_p_stats.total_disk, used=used,size=size)
+                    self.__peers_stats_responses[peer_id]= current_p_stats
+                    
+
+                # .put(size = size)
+            # self.__peers_stats_responses[peer_id]
+
     async def update_params(self,**kwargs):
         async with self.params_lock.writer_lock:
             self.max_timeout_to_recover         = HF.parse_timespan(kwargs.get("max_timeout_to_recover",self.params.max_timeout_to_recover))
@@ -161,6 +195,10 @@ class StoragePeerManager:
 
             self.params.update(**kwargs)
 
+    async def get_current_peers_env_str(self)->str:
+        peers = await self.get_available_peers()
+        peers_str = list(map(lambda p:"{}:{}".format(p.peer_id,p.port), peers))
+        return " ".join(peers_str)
     async def active_deploy_peers(
         self,
         disk:int= HF.parse_size("10GB"),
@@ -274,56 +312,87 @@ class StoragePeerManager:
                           selected_node:int=0,
                           elastic:str="false",
                           base_path:str= "/app/mictlanx",
-                          network_id:str = "mictlanx"
+                          network_id:str = "mictlanx",
+                          max_idle_time:str = "1m"
     )->Tuple[str, int,Result[SummonContainerResponse,Exception]]:
         """return the <container_id> <port> <result>"""
-        _start_time     = T.time()
-        params      = await self.get_params()
-        local_path = "{}/local".format(base_path)
-        log_path = "{}/log".format(base_path)
-        data_path = "{}/data".format(base_path)
-        payload         =self.peers_config.get(container_id,SummonContainerPayload(
-            container_id=container_id,
-            image=os.environ.get("MICTLANX_PEER_IMAGE","nachocode/mictlanx:peer"),
-            hostname    = container_id,
-            exposed_ports=[ExposedPort(NONE,port,port,NONE)],
-            envs= {
-                "USER_ID":"6666",
-                "GROUP_ID":"6666",
-                "BIN_NAME":"peer",
-                "NODE_ID":container_id,
-                "NODE_PORT":str(port),
-                "IP_ADDRESS":container_id,
-                "SERVER_IP_ADDR":"0.0.0.0",
-                "NODE_DISK_CAPACITY":str(disk),
-                "NODE_MEMORY_CAPACITY":str(memory),
-                "BASE_PATH":base_path,
-                "LOCAL_PATH":local_path,
-                "DATA_PATH":data_path,
-                "LOG_PATH":log_path,
-                "MIN_INTERVAL_TIME":"5",
-                "MAX_INTERVAL_TIME":"20",
-                "WORKERS":str(workers),
-                "ELASTIC":elastic
-            },
-            memory=memory,
-            cpu_count=cpu,
-            mounts=[
-                MountX(source="{}-data".format(container_id), target=data_path, mount_type=1),
-                MountX(source="{}-log".format(container_id), target=log_path, mount_type=1),
-                MountX(source="{}-local".format(container_id), target=local_path, mount_type=1),
-            ],
-            network_id=network_id,
-            selected_node=Some(str(selected_node)),
-            force=Some(True)
-        ))
-        # print("PAYLOAD", payload)
-        response        = self.summoner.summon(
-            mode= params.summoner_mode,
-            payload=payload, 
-        )
- 
-        return (container_id,port ,response)
+        with self.tracer.start_as_current_span("spm.deploy.peer") as span:
+            span:Span = span
+            try:
+                _start_time = T.time()
+                params      = await self.get_params()
+                local_path  = "{}/local".format(base_path)
+                log_path    = "{}/log".format(base_path)
+                data_path   = "{}/data".format(base_path)
+                envs = {
+                        "USER_ID":"6666",
+                        "GROUP_ID":"6666",
+                        "BIN_NAME":"peer",
+                        "NODE_ID":container_id,
+                        "NODE_PORT":str(port),
+                        "IP_ADDRESS":container_id,
+                        "SERVER_IP_ADDR":"0.0.0.0",
+                        "NODE_DISK_CAPACITY":str(disk),
+                        "NODE_MEMORY_CAPACITY":str(memory),
+                        "BASE_PATH":base_path,
+                        "LOCAL_PATH":local_path,
+                        "DATA_PATH":data_path,
+                        "LOG_PATH":log_path,
+                        "MIN_INTERVAL_TIME":str(self.params.peer_min_interval_time),
+                        "MAX_INTERVAL_TIME":str(self.params.peer_max_interval_time), 
+                        "WORKERS":str(workers),
+                        "ELASTIC":elastic,
+                        "MAX_IDLE_TIME":str(HF.parse_timespan(max_idle_time)),
+                }
+                payload:SummonContainerPayload         =self.peers_config.get(container_id,SummonContainerPayload(
+                    container_id=container_id,
+                    # image=os.environ.get("MICTLANX_PEER_IMAGE","nachocode/mictlanx:peer"),
+                    image=self.params.peer_docker_image,
+                    hostname    = container_id,
+                    exposed_ports=[ExposedPort(NONE,port,port,NONE)],
+                    envs= envs,
+                    memory=memory,
+                    cpu_count=cpu,
+                    mounts=[
+                        MountX(source="{}-data".format(container_id), target=data_path, mount_type=1),
+                        MountX(source="{}-log".format(container_id), target=log_path, mount_type=1),
+                        MountX(source="{}-local".format(container_id), target=local_path, mount_type=1),
+                    ],
+                    network_id=network_id,
+                    selected_node=Some(str(selected_node)),
+                    force=Some(True)
+                ))
+                env_peers = await self.get_current_peers_env_str()
+                payload.envs["PEERS"]= env_peers
+                
+                response        = self.summoner.summon(
+                    mode= params.summoner_mode,
+                    payload=payload, 
+                )
+                if response.is_ok:
+                    span.add_event(name="spm.deployed.peer",attributes={
+                        "image":params.peer_docker_image,
+                        "hostname":container_id,
+                        "exposed_ports":[port],
+                        "local_path":local_path,
+                        "log_path":log_path,
+                        "data_path":data_path,
+                        "memory":HF.format_size(memory),
+                        "network_id":network_id,
+                        "selected_node":selected_node,
+                        "force":True,
+                        "PEERS":env_peers,
+                        
+                        **envs
+                    })
+                    span.set_status(status=Status(StatusCode.OK))
+                else:
+                    span.add_event(name="spm.deploy.failed",attributes={"detail":str(response.unwrap_err()),"container_id":container_id})
+                    span.set_status(status=Status(StatusCode.ERROR))
+                return (container_id,port ,response)
+            except Exception as e:
+                span.set_status(status=Status(StatusCode.ERROR))
+                span.add_event(name="spm.deploy.peer.exception", attributes={"detail":str(e)})
 
     async def __find_peer(self, peer_id:str, peers:List[Peer])->Option[Peer]:
         async with self.lock.reader_lock:
@@ -332,9 +401,39 @@ class StoragePeerManager:
     
 
     async def sorted_by_uf(self,size:int=0)->List[str]:
-        async with self.lock.reader_lock:
-            size_filtered = filter(lambda p: p.available_disk >= size,sorted(self.__peers_stats_responses.values(),key=lambda x: x.disk_uf))
-            return list(map(lambda x: x.peer_id,   size_filtered ) )
+        with self.tracer.start_as_current_span("spm.sorted_by_uf") as span:
+            span:Span = span
+            async with self.lock.reader_lock:
+                p_stats = list(self.__peers_stats_responses.values())
+                
+                
+                # ufs = dict(list(map(lambda x: (x.peer_id,J.dumps({"uf":x.disk_uf, "used":x.used_disk,"available":x.available_disk,"total":x.total_disk})), p_stats)))
+                sorted_p = sorted(p_stats,key=lambda x: x.disk_uf)
+                size_filtered = list(filter(
+                    lambda p: p.available_disk >= size,sorted_p
+                ))
+                if len(size_filtered) ==0:
+                    span.add_event(name="capacity.filter", attributes={"size":size,"error":True})
+                peers_ids = list(map(lambda x: x.peer_id,   size_filtered ) )
+                span.add_event(name="sorted.peers",attributes={"filtered_peers": peers_ids})
+                for ps in p_stats:
+                    span.set_attribute(key="{}.uf".format(ps.peer_id), value=ps.disk_uf)
+                    span.set_attribute(key="{}.total".format(ps.peer_id), value=ps.total_disk)
+                    span.set_attribute(key="{}.used".format(ps.peer_id), value=ps.used_disk)
+                    span.set_attribute(key="{}.available".format(ps.peer_id), value=ps.available_disk)
+                    span.set_attribute(key="{}.n_balls".format(ps.peer_id), value=len(ps.balls))
+                    # span.add_event(name= "{}.stats".format(ps.peer_id), attributes={
+                    #     "uf":ps.disk_uf,
+                    #     "total":ps.total_disk,
+                    #     "used":ps.used_disk,
+                    #     "available":ps.available_disk,
+                    #     "n_balls":len(ps.balls)
+                    # })
+
+                # span.set_attributes({
+                    # **ufs
+                # })
+                return peers_ids
     # async def sorted_by_uf_ids(self,size:int=0)->List[Peer]:
     #     async with self.lock.reader_lock:
     #         size_filtered = filter(lambda p: p.available_disk >= size,sorted(self.__peers_stats_responses.values(),key=lambda x: x.disk_uf))
@@ -463,6 +562,7 @@ class StoragePeerManager:
     
     async def stats(self)->List[PeerStatsResponse]:
         """Traverse the peers and get the stats /api/v4/peers/stats"""
+        # with self.tracer.start_as_current_span("stats")
         available_peers = await self.get_available_peers()
         xs=  [p.get_stats().unwrap_or(PeerStatsResponse.empty()) for p in available_peers ]
         xs_dict = dict([(p.peer_id, p) for p in xs])
@@ -470,140 +570,221 @@ class StoragePeerManager:
             self.__peers_stats_responses = xs_dict
         return xs
     async def recover(self,params:StoragePeerManagerParams):
-        try:
-            current_peers     = set(await self.get_available_peers_ids())
-            unavailable_peers = set(await self.get_unavailable_peers_ids())
-            to_recover_peers  = unavailable_peers.difference(current_peers)
-            async with self.lock.writer_lock:
-                for unavailable_peer in self.unavailable_peers:
-                    if unavailable_peer.peer_id in to_recover_peers:
-                        last_time = self.time_last_recover_by_peer.setdefault(unavailable_peer.peer_id,T.time())
-                        elapsed   = T.time() - last_time
-                        elapsed_str = HF.format_timespan(elapsed)
-
-                        if elapsed >= self.max_recover_time_until_restart and params.peer_elastic:
-                            (_,_,res) = await self.deploy_peer(container_id=unavailable_peer.peer_id,port=unavailable_peer.port)
-                            self.time_last_recover_by_peer[unavailable_peer.peer_id] = T.time()
-                            if res.is_err:
-                                self.__log.error({
-                                    "event":"DEPLOY.PEER.FAILED",
-                                    "detail":str(res.unwrap_err())
-                                })
-                            else:
-                                self.__log.info({
-                                    "event":"PEER.RESTART",
-                                    "elapsed":elapsed_str,
-                                    "max_timeout":self.max_recover_time_until_restart,
-                                    "ok":res.is_ok
-                                })
-                        elif elapsed >= self.max_recover_time_until_restart and not params.peer_elastic:
-                            self.__log.warning({
-                                "event":"PEER.ELASTICITY.DISABLED",
-                                "elapsed":elapsed_str,
-                                "peer_elastic":params.peer_elastic 
+        with self.tracer.start_as_current_span("spm.recover") as span:
+            span:Span = span
+            try:
+                current_peers     = set(await self.get_available_peers_ids())
+                unavailable_peers = set(await self.get_unavailable_peers_ids())
+                to_recover_peers  = unavailable_peers.difference(current_peers)
+                span.add_event(name="spm.recover.init",attributes={"current_peers":list(current_peers), "unavailable_peers":list(unavailable_peers), "to_recover_peers":list(to_recover_peers) })
+                
+                async with self.lock.writer_lock:
+                    for unavailable_peer in self.unavailable_peers:
+                        
+                        if unavailable_peer.peer_id in to_recover_peers:
+                            last_time = self.time_last_recover_by_peer.setdefault(unavailable_peer.peer_id,T.time())
+                            elapsed   = T.time() - last_time
+                            elapsed_str = HF.format_timespan(elapsed)
+                            span.add_event(name="spm.recover.{}".format(unavailable_peer.peer_id), attributes={
+                                "elapsed": elapsed_str,
+                                "max_recover_time_until_restart": self.max_recover_time_until_restart,
+                                "elastic":params.peer_elastic
                             })
-            
-                        self.__log.debug({
-                            "event":"PEER.RECOVERING",
-                            "peer_id":unavailable_peer.peer_id,
-                            "elapsed":elapsed_str,
-                            "max_recover_time_until_restart":params.max_recover_time_until_restart
+                            
+                            if elapsed >= self.max_recover_time_until_restart and params.peer_elastic:
+                                (_,_,res) = await self.deploy_peer(container_id=unavailable_peer.peer_id,port=unavailable_peer.port)
+                                self.time_last_recover_by_peer[unavailable_peer.peer_id] = T.time()
+                                if res.is_err:
+                                    span.add_event(name="spm.recover.failed",attributes={"peer_id":unavailable_peer.peer_id})
+                                    span.set_status(status=Status(StatusCode.ERROR))
+                                else:
+                                    span.add_event(name="spm.recovered",attributes={
+                                        "peer_id":unavailable_peer.peer_id,
+                                        "elapsed":elapsed_str,
+                                        "max_timeout":self.max_recover_time_until_restart,
+                                        "ok":res.is_ok
+                                    })
+                                    
+                            elif elapsed >= self.max_recover_time_until_restart and not params.peer_elastic:
+                                span.add_event(name="spm.elasticity.disabled",attributes={
+                                    "peer_id":unavailable_peer.peer_id,
+                                    "elapsed":elapsed_str,
+                                })
+                
+                            # self.__log.debug({
+                            #     "event":"PEER.RECOVERING",
+                            #     "peer_id":unavailable_peer.peer_id,
+                            #     "elapsed":elapsed_str,
+                            #     "max_recover_time_until_restart":params.max_recover_time_until_restart
+                            # })
+                            self.peers.append(unavailable_peer)
+            except Exception as e:
+                span.set_status(status=Status(StatusCode.ERROR))
+                span.add_event(name="recover.exception",attributes={"detail":str(e)})
+                # self.__log.error({
+                #     "event":"RECOVER.EXCEPTION",
+                #     "detail":str(e)
+                # })
+    async def handshakes(self):
+        with self.tracer.start_as_current_span("spm.handshakes") as span:
+            span:Span = span
+            availables = await self.get_available_peers()
+            # print("AVAILABLES", len(availables))
+            for p in availables:
+                for p2 in availables:
+                    if p.peer_id == p2.peer_id:
+                        continue
+                    stats = self.get_stats().get(p2.peer_id)
+                    # print("STATS", stats)
+                    if stats is None:
+                        continue
+
+                    result = p.add_peer(
+                        id   = p2.peer_id,
+                        disk =stats.total_disk,
+                        used_disk=0,
+                        ip_addr=p2.ip_addr,
+                        memory=HF.parse_size("2GB"),
+                        port=p2.port,
+                        used_memory=0,
+                        weight=1
+                    )
+                    # print("RESULT", result)
+                    if result.is_err:
+                        span.set_status(status=Status(StatusCode.ERROR))
+                        span.add_event(name="add.peer.failed", attributes={
+                            "detail":str(result.unwrap_err()),
+                            "peer_id":p.peer_id,
+                            "added_peer_id":p2.peer_id,
+                            "disk":stats.total_disk,
+                            "ip_addr":p2.ip_addr,
+                            "port":p2.port,
+                            # "ok":result.is_ok
                         })
-                        self.peers.append(unavailable_peer)
-        except Exception as e:
-            self.__log.error({
-                "event":"RECOVER.EXCEPTION",
-                "detail":str(e)
-            })
+                    else:
+                        span.add_event(name="added.peer", attributes={
+                            "peer_id":p.peer_id,
+                            "added_peer_id":p2.peer_id,
+                            "disk":stats.total_disk,
+                            "ip_addr":p2.ip_addr,
+                            "port":p2.port,
+                            "ok":result.is_ok
+                        })
     async def run(self):
-        try:
-            current_time                         = T.time()
-            params                               = await self.get_params()
-            (available_peers, unavailable_peers) = await self.check_peers_availability()
-            current_stats                        = await self.stats()
-            self.global_stats                    = sum(current_stats, PeerStatsResponse.empty())
-            elapsed_time                         = current_time - self.last_recover_tick
-            elapsed_time_to_save_peer_config     = current_time - self.last_to_save_peer_config
-            # print("__"*50)
-            self.__log.debug({
-                "event":"PEER.MANAGER.TICK",
-                "elapsed_time":HF.format_timespan(elapsed_time),
-                "max_timeout_to_recover":params.max_timeout_to_recover,
-                "available_peers":len(available_peers),
-                "unavailable_peers":len(unavailable_peers),
-            })
-            
-            if elapsed_time >= self.max_timeout_to_recover:
-                await self.recover(
-                    params=params
-                )
-                self.last_recover_tick = T.time()
-                
-            if elapsed_time_to_save_peer_config >= self.max_timeout_to_save_peer_config:
-                res = RouterUtils.save_peers(path=params.peers_config_path,peers_config=self.peers_config)
-                self.__log.debug({
-                    "event":"SAVE.PEERS.CONFIG",
-                    "ok":res.is_ok,
-                    "path":params.peers_config_path
+        with self.tracer.start_as_current_span("spm.run.healer") as span:
+            span:Span = span
+            try:
+                current_time                         = T.time()
+                params                               = await self.get_params()
+                (available_peers, unavailable_peers) = await self.check_peers_availability()
+                current_stats                        = await self.stats()
+                self.global_stats                    = sum(current_stats, PeerStatsResponse.empty())
+                elapsed_time                         = current_time - self.last_recover_tick
+                elapsed_time_to_save_peer_config     = current_time - self.last_to_save_peer_config
+                elapsed_time_handshakes              = current_time - self.last_handshakes
+                # print("__"*50)
+                span.add_event(name="tick",attributes={
+                    "elapsed_time":HF.format_timespan(elapsed_time),
+                    "max_timeout_to_recover":params.max_timeout_to_recover,
+                    "available_peers":available_peers,
+                    "unavailable_peers":unavailable_peers,
                 })
-                self.last_to_save_peer_config = T.time()
-                
-            # if elapsed_time >= self.max
-            return Ok(0)
-        except Exception as e:
-            self.__log.error({
-                "event":"SPM.RUN.EXCEPTION",
-               "detail":str(e)
-            })
-            return Err(e)
+                # self.__log.debug({
+                #     "event":"PEER.MANAGER.TICK",
+                #     "elapsed_time":,
+                #     "max_timeout_to_recover":params.max_timeout_to_recover,
+                #     "available_peers":len(available_peers),
+                #     "unavailable_peers":len(unavailable_peers),
+                # })
+                # print("HANDSHGAKES", HF.format_timespan(elapsed_time_handshakes))
+                if elapsed_time_handshakes >= HF.parse_timespan(self.params.max_timeout_peers_handshake): 
+                    await self.handshakes()
+                    self.last_handshakes = T.time()
+                if elapsed_time >= self.max_timeout_to_recover:
+                    await self.recover(
+                        params=params
+                    )
+                    self.last_recover_tick = T.time()
+                    
+                if elapsed_time_to_save_peer_config >= self.max_timeout_to_save_peer_config:
+                    res = RouterUtils.save_peers(path=params.peers_config_path,peers_config=self.peers_config)
+                    span.add_event(name="save.peers.config", attributes={"timeout":self.max_timeout_to_save_peer_config})
+                    # self.__log.debug({
+                    #     "event":"SAVE.PEERS.CONFIG",
+                    #     "ok":res.is_ok,
+                    #     "path":params.peers_config_path
+                    # })
+                    self.last_to_save_peer_config = T.time()
+                    
+                # if elapsed_time >= self.max
+                return Ok(0)
+            except Exception as e:
+                span.add_event(name="spm.run.exception",attributes={"detail":str(e)})
+                span.set_status(status=Status(StatusCode.ERROR))
+                # self.__log.error({
+                #     "event":"SPM.RUN.EXCEPTION",
+                # "detail":str(e)
+                # })
+                return Err(e)
         # finally:
             # self.last_tick = T.time()
     
     async def make_available(self,peer_id:str)->bool:
-        unavailable_peer       = next(filter(lambda up: up.peer_id==peer_id ,self.unavailable_peers), -1)
-        not_in_unavailable     = unavailable_peer == -1
-        self.unavailable_peers = list(filter(lambda up: not up.peer_id==peer_id ,self.unavailable_peers))
-        already_available      = len(list(filter(lambda ap: ap.peer_id == peer_id, self.available_peers))) == 1
-        peers_ids = await self.get_peers_ids()
-        new_peer = await self.__find_peer(peer_id=peer_id, peers= self.peers)
+        with self.tracer.start_as_current_span("spm.make.available") as span:
+            span:Span = span
 
-        if not already_available and not not_in_unavailable:
-            self.__log.info({
-                "event":"AVAILABLE",
-                "new":False,
-                "peer_id":peer_id
-            })
-            self.available_peers.append(unavailable_peer)
-            return True
+            unavailable_peer       = next(filter(lambda up: up.peer_id==peer_id ,self.unavailable_peers), -1)
+            not_in_unavailable     = unavailable_peer == -1
+            self.unavailable_peers = list(filter(lambda up: not up.peer_id==peer_id ,self.unavailable_peers))
+            already_available      = len(list(filter(lambda ap: ap.peer_id == peer_id, self.available_peers))) == 1
+            # peers_ids              = await self.get_peers_ids()
+            new_peer               = await self.__find_peer(peer_id=peer_id, peers= self.peers)
 
-        elif not already_available and not_in_unavailable and new_peer.is_some:
-            _new_peer = new_peer.unwrap()
-            self.__log.info({
-                "event":"AVAILABLE",
-                "new":True,
-                "peer_id":peer_id
-            })
-            self.available_peers.append(_new_peer)
-            return True
-        else:
-            return False
+            if not already_available and not not_in_unavailable:
+                # self.__log.info({
+                #     "event":"AVAILABLE",
+                #     "new":False,
+                #     "peer_id":peer_id
+                # })
+                span.add_event(name="available", attributes={
+                   "peer_id":unavailable_peer.peer_id
+                })
+                self.available_peers.append(unavailable_peer)
+                return True
+
+            elif not already_available and not_in_unavailable and new_peer.is_some:
+                _new_peer = new_peer.unwrap()
+                # self.__log.info({
+                #     "event":"AVAILABLE",
+                #     "new":True,
+                #     "peer_id":peer_id
+                # })
+                span.add_event(name="available", attributes={
+                   "peer_id":_new_peer.peer_id
+                })
+                self.available_peers.append(_new_peer)
+                return True
+            else:
+                span.add_event(name="available.failed", attributes={"peer_id":peer_id})
+                return False
     def make_unavailable(self,peer_id:str)->bool:
-        available_peer         = next(filter(lambda up: up.peer_id==peer_id ,self.available_peers), None)
-        if not available_peer:
+        with self.tracer.start_as_current_span("spm.make.unavailble") as span:
+            span:Span = span
+            available_peer         = next(filter(lambda up: up.peer_id==peer_id ,self.available_peers), None)
+            if not available_peer:
+                span.add_event(name="unavailable.failed",attributes={"peer_id":peer_id})
+                return False
+            self.available_peers     = list(filter(lambda up: not up.peer_id==peer_id ,self.available_peers))
+            already_unavailable      = len(list(filter(lambda ap: ap.peer_id == peer_id, self.unavailable_peers)))==1
+            if not already_unavailable:
+                self.unavailable_peers.append(available_peer)
+                if peer_id in self.__peers_stats_responses:
+                    del self.__peers_stats_responses[peer_id]
+                span.add_event(name="unavailable",attributes={"peer_id":peer_id})
+            
+                return True
+            span.add_event(name="unavailable.failed",attributes={"peer_id":peer_id})
             return False
-        # print("AVAILABLE_PEER", available_peer)
-        self.available_peers     = list(filter(lambda up: not up.peer_id==peer_id ,self.available_peers))
-        already_unavailable      = len(list(filter(lambda ap: ap.peer_id == peer_id, self.unavailable_peers)))==1
-        if not already_unavailable:
-            self.unavailable_peers.append(available_peer)
-            if peer_id in self.__peers_stats_responses:
-                del self.__peers_stats_responses[peer_id]
-            self.__log.info({
-                "event":"UNAVAILABLE",
-                "peer_id":peer_id
-            })
-            return True
-        return False
         
 
 
@@ -655,66 +836,106 @@ class StoragePeerManager:
         
     async def check_peers_availability(self) -> Tuple[List[str], List[str]]:
         """Returns a tuple of the list of the peers ids -> (available, unavailable) """
-        # async with self.lock.reader_lock:
-        peers = (await self.get_available_peers()) + (await self.get_peers())
-            # f len(self.peers) == 0 else self.peers
+        with self.tracer.start_as_current_span("spm.check.peers.availability") as span:
+            span:Span = span
+            peers     = (await self.get_available_peers()) + (await self.get_peers())
+            peers_ids = list(map(lambda x:x.peer_id, peers))
+            counter   = 0
+            tasks     = [t async for t in self.get_ufs_tasks(peers= peers)]
+            xs        = await asyncio.gather(*tasks)
+            span.add_event("spm.check.peers.availability.init",attributes={
+                "peers":peers_ids
+            })
+            for (peer, get_ufs_response) in xs:
+                try:
+                    if get_ufs_response.is_ok:
+                        
+                        get_uf_result              = get_ufs_response.unwrap()
+                        # self.get
+                        peer_stats            = self.__peer_ufs.get(peer.peer_id,PeerStats(peer_id=peer.peer_id))
+                        async with self.lock.writer_lock:
+                            peer_stats.total_disk = get_uf_result.total_disk
+                            peer_stats.used_disk  = get_uf_result.used_disk
+                            x                     = await self.make_available(peer_id=peer.peer_id)
+                            counter                +=1
+                            self.__peer_ufs[peer.peer_id] = peer_stats
+                        span.add_event(name="spm.peer.available",attributes={
+                            "peer_id":peer.peer_id,
+                            "total":get_uf_result.total_disk,
+                            "used":get_uf_result.used_disk,
+                            "counter":counter
+                        })
+                        # self.__log.debug("Peer {} is  available".format(peer.peer_id))
+                    else:
+                        async with self.lock.writer_lock:
+                            x = self.make_unavailable(peer_id=peer.peer_id)
+                        span.add_event(name="spm.peer.unavailable",attributes={
+                            "peer_id":peer.peer_id,
+                            # "total":get_uf_result.total_disk,
+                            # "used":get_uf_result.used_disk,
+                            "counter":counter
+                        })
+                        
+                        # self.__log.error("Peer {} is not available.".format(peer.peer_id))
+                    
+                    percentage_available_peers =  (counter / (len(await self.get_available_peers()) + len(await self.get_unavailable_peers())) )*100 
+                    if percentage_available_peers == 0:
+                        span.set_status(status=Status(StatusCode.ERROR))
+                        span.add_event(name="spm.peers.ALL.UNAVAIABLE", attributes={
+                            "detail":"No available peers. Please contact me on jesus.castillo.b@cinvestav.mx"
+                        })
+                        raise Exception("No available peers. Please contact me on jesus.castillo.b@cinvestav.mx")
+                    
+                    # self.__log.debug("{}% of the peers are available".format(percentage_available_peers ))
+            
+                except R.exceptions.ConnectTimeout as e:
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    span.add_event(name="spm.check.peer.availability.connect.timeout",attributes={
+                        "peer_id":peer.peer_id,
+                        "detail":str(e)
+                    })
+                    # self.__log.error({
+                    #     "msg":"ConnectionTimeout",
+                    #     "peer_id":peer.peer_id
+                    # })
 
-        counter                = 0
-        # self.unavailable_peers = []
-        # available              = []
-        # print("PEERS",peers)
-        tasks = [t async for t in self.get_ufs_tasks(peers= peers)]
-        xs = await asyncio.gather(*tasks)
-        for (peer, get_ufs_response) in xs:
-            try:
-                # get_ufs_response  = peer.get_ufs_with_retry(tries=self.max_tries,timeout=15)
-
-                if get_ufs_response.is_ok:
-                    get_uf_result              = get_ufs_response.unwrap()
-                    peer_stats            = self.__peer_ufs.get(peer.peer_id,PeerStats(peer_id=peer.peer_id))
-                    async with self.lock.writer_lock:
-                        peer_stats.total_disk = get_uf_result.total_disk
-                        peer_stats.used_disk  = get_uf_result.used_disk
-                        x                     = await self.make_available(peer_id=peer.peer_id)
-                        counter                +=1
-                    self.__log.debug("Peer {} is  available".format(peer.peer_id))
-                else:
-                    async with self.lock.writer_lock:
-                        x = self.make_unavailable(peer_id=peer.peer_id)
-                    self.__log.error("Peer {} is not available.".format(peer.peer_id))
-                percentage_available_peers =  (counter / (len(await self.get_available_peers()) + len(await self.get_unavailable_peers())) )*100 
-                if percentage_available_peers == 0:
-                    self.__log.error("No available peers. Please contact me on jesus.castillo.b@cinvestav.mx")
-                    raise Exception("No available peers. Please contact me on jesus.castillo.b@cinvestav.mx")
-                
-                self.__log.debug("{}% of the peers are available".format(percentage_available_peers ))
-        
-            except R.exceptions.ConnectTimeout as e:
-                self.__log.error({
-                    "msg":"ConnectionTimeout",
-                    "peer_id":peer.peer_id
-                })
-
-            except R.exceptions.ConnectionError as e:
-                self.__log.error({
-                    "msg":"ConnectionError",
-                    "peer_id":peer.peer_id
-                })
-            except R.exceptions.HTTPError as e:
-                self.__log.error({
-                    "msg":str(e.response.content.decode("utf8") ),
-                    "peer_id":peer.peer_id
-                })
-                # continue
-            except Exception as e:
-                self.__log.error({
-                    "msg":str(e),
-                    "peer_id":peer.peer_id
-                })
-        # Clean peers
-        async with self.lock.writer_lock:
-            self.peers = []
-        return (await self.get_available_peers_ids(),await self.get_unavailable_peers_ids())
+                except R.exceptions.ConnectionError as e:
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    span.add_event(name="spm.check.peer.availability.connect.error",attributes={
+                        "peer_id":peer.peer_id,
+                        "detail":str(e)
+                    })
+                    # self.__log.error({
+                    #     "msg":"ConnectionError",
+                    #     "peer_id":peer.peer_id
+                    # })
+                except R.exceptions.HTTPError as e:
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    span.add_event(name="spm.check.peer.availability.http.error",attributes={
+                        "peer_id":peer.peer_id,
+                        "detail":str(e)
+                    })
+                    # self.__log.error({
+                    #     "msg":str(e.response.content.decode("utf8") ),
+                    #     "peer_id":peer.peer_id
+                    # })
+                    # continue
+                except Exception as e:
+                    span.set_status(status=Status(StatusCode.ERROR))
+                    span.add_event(name="spm.check.peer.availability.exception",attributes={
+                        "peer_id":peer.peer_id,
+                        "detail":str(e)
+                    })
+            # Clean peers
+            async with self.lock.writer_lock:
+                self.peers = []
+            available_peers_ids = await self.get_available_peers_ids()
+            unavailable_peers_ids = await self.get_unavailable_peers_ids()
+            span.add_event(name="spm.peers.availability.checked",attributes={
+                "available":available_peers_ids,
+                "unavailable":unavailable_peers_ids
+            })
+            return (available_peers_ids, unavailable_peers_ids)
             # continue
             # finally:
             #     T.sleep(self.heartbeat)

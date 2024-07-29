@@ -1,2 +1,4 @@
 #!/bin/bash
-docker compose -p mictlanx -f ./docker-compose.yml up -d
+./build.sh $1
+docker compose -p mictlanx -f ./router.yml down
+docker compose -p mictlanx -f ./router.yml up -d
