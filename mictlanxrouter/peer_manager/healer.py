@@ -206,7 +206,7 @@ class StoragePeerManager:
         workers:int = 2,
         rf:int = 1,
         cpu:int = 1,
-        elastic:str="false",
+        elastic:str="true",
         base_path:str= "/app/mictlanx",
         network_id:str = "mictlanx"
     )->DeployPeersResult:
@@ -310,7 +310,7 @@ class StoragePeerManager:
                           memory:int = HF.parse_size("2GB"),
                           cpu:int = 1,
                           selected_node:int=0,
-                          elastic:str="false",
+                          elastic:str="true",
                           base_path:str= "/app/mictlanx",
                           network_id:str = "mictlanx",
                           max_idle_time:str = "1m"

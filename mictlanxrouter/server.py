@@ -1334,7 +1334,7 @@ async def get_data(
             span.add_event(name="get.metadata", attributes={},timestamp=get_metadata_start_time)
             # > ======================= GET.STREAMING ============================
             get_streaming_start_time = T.time_ns()
-            result   = peer.get_streaming(bucket_id=bucket_id,key=key,headers=headers)
+            result                   = peer.get_streaming(bucket_id=bucket_id,key=key,headers=headers)
             if result.is_err:
                 raise HTTPException(status_code=404, detail="Ball({}@{}) not found".format(bucket_id,key))
             else:

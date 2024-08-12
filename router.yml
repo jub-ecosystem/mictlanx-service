@@ -1,7 +1,7 @@
 services:
   
   mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.0.160-alpha.0
+    image: nachocode/mictlanx:router-0.0.160-alpha.1
     container_name: mictlanx-router-0
     environment:
       - MICTLANX_ROUTER_SERVICE_NAME=${MICTLANX_ROUTER_SERVICE_NAME:-mictlanx-router}
@@ -45,7 +45,7 @@ services:
       - MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE=${MICTLANX_SPM_PEER_CONFIG_MAX_TIMEOUT_TO_SAVE:-20m}
       - MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART=${MICTLANX_SPM_MAX_RECOVER_TIME_UTIL_RESTART:-30s}
 
-      - MICTLANX_SPM_PEERS_DOCKER_IMAGE=${MICTLANX_SPM_PEERS_DOCKER_IMAGE:-nachocode/mictlanx:peer-0.0.160-alpha.0}
+      - MICTLANX_SPM_PEERS_DOCKER_IMAGE=${MICTLANX_SPM_PEERS_DOCKER_IMAGE:-nachocode/mictlanx:peer-0.0.160-alpha.1}
       - MICTLANX_SPM_PEERS_BASE_PORT=${MICTLANX_SPM_PEERS_BASE_PORT:-25000}
       - MICTLANX_SPM_PEERS_BASE_PROTOCOL=${MICTLANX_SPM_PEERS_BASE_PROTOCOL:-http}
       - MICTLANX_SPM_PEERS_ELASTIC=${MICTLANX_SPM_PEERS_ELASTIC:-1}
