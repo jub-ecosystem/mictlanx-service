@@ -7,7 +7,10 @@ import aiorwlock
 import signal
 from asyncio.queues import Queue
 import asyncio
-from fastapi import FastAPI,Response,HTTPException,Header,UploadFile,Request
+from fastapi import FastAPI,Response,HTTPException,Header,UploadFile,Request,File,BackgroundTasks,Form
+# import tempfile
+# from secretsharing import PlaintextToHexSecretSharer
+
 from contextlib import asynccontextmanager
 from fastapi.responses import StreamingResponse
 from fastapi.openapi.utils import get_openapi
@@ -38,10 +41,16 @@ from mictlanxrouter.tasksx import TaskX,DefaultTaskManager
 # ===========================================================
 # from opentelemetry.instrumentation.requests import RequestsInstrumentor
 # Prometheus
+from prometheus_client import Counter, generate_latest
+
 from prometheus_fastapi_instrumentator import Instrumentator
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry import trace
 from opentelemetry.trace import Span,Status,StatusCode
+
+ACCESS_COUNTER = Counter('data_access', 'Total number of access', ['bucket_id', 'key'])
+METADATA_ACCESS_COUNTER = Counter('metadata_access', 'Total number of metadata access', ['bucket_id', 'key'])
+
 # from opentelemetry.span
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -607,6 +616,47 @@ async def leave_peer(peer_id:str):
         raise HTTPException(status_code=500, detail="Something went wrong removin a peer {}".format(peer_id))
 
 # > ======================= Peers ============================
+
+
+@app.post("/api/v4/u/buckets/{bucket_id}/{key}")
+async def update_metadata(
+    bucket_id:str,
+    key:str,
+    metadata:Metadata, 
+):
+    with tracer.start_as_current_span("update.metadata") as span:
+        span:Span      = span  
+        current_replicas = await replica_manager.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+        xs       =  await storage_peer_manager.from_peer_ids_to_peers(current_replicas)
+        success_replicas = len(xs)
+        for peer in xs:
+            result = peer.put_metadata(
+                bucket_id=bucket_id,
+                key=key,
+                ball_id= metadata.ball_id,
+                checksum=metadata.checksum,
+                content_type=metadata.content_type,
+                headers={"update":"1"},
+                is_disable=metadata.is_disabled,
+                producer_id=metadata.producer_id,
+                size=metadata.size,
+                tags=metadata.tags,
+            )
+            if result.is_err:
+                success_replicas-= 1
+
+        
+        if success_replicas == 0:
+            raise HTTPException(status_code=500,detail="")
+        return Response(content=None, status_code=204)
+
+
+            # print()
+
+
+        
+        # for peer in 
+
 
 
 # ======================= PUT ============================
@@ -1236,6 +1286,8 @@ async def get_metadata(
                 "size":most_recent_metadata.metadata.size,
                 "response_time":T.time()- start_time
             })
+            METADATA_ACCESS_COUNTER.labels(bucket_id=bucket_id, key = key).inc()
+
             return JSONResponse(content=jsonable_encoder(most_recent_metadata) )
         except R.exceptions.HTTPError as e:
             detail = str(e.response.content.decode("utf-8") )
@@ -1362,6 +1414,8 @@ async def get_data(
                 _filename = metadata.metadata.tags.get("fullname", metadata.metadata.tags.get("filename", "{}_{}".format(bucket_id,key) ) ) if filename == "" else filename
                 if attachment:
                     response.headers["Content-Disposition"] = f"attachment; filename={_filename}" 
+
+                ACCESS_COUNTER.labels(bucket_id=bucket_id, key = key).inc()
                 return response
 
                 # return JSONResponse(content=jsonable_encoder(most_recent_metadata) )
@@ -1826,6 +1880,11 @@ async def spm_update_params(req:Request):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))   
+
+
+
+
+
 
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")

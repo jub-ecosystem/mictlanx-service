@@ -44,7 +44,7 @@ async def run_replicator(
                         "detail":str(res.unwrap_err()), 
                     })
             except asyncio.QueueEmpty  as e:
-                log.warn({
+                log.warning({
                     "detail":"Data replicator queue timeout. No replication event has been arrived.",
                     "heartbeat":heartbeat
                 })

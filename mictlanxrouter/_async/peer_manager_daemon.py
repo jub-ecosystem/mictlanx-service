@@ -28,10 +28,10 @@ def run_async_healer(
 ):
     async def __run_async_healer():
         # _heartbeat = HF.parse_timespan(heartbeat)
-        params = await ph.get_params()
-        last_time = T.time()
+        params              = await ph.get_params()
+        last_time           = T.time()
         _queue_tick_timeout = HF.parse_timespan(params.queue_tick_timeout)
-        _max_idle_time = HF.parse_timespan(params.max_idle_time)
+        _max_idle_time      = HF.parse_timespan(params.max_idle_time)
         while True:
             try:
                 event = ph.q.get_nowait()
@@ -58,7 +58,7 @@ def run_async_healer(
                     
             except asyncio.QueueEmpty as e:
                 elapsed_time = T.time() - last_time
-                log.warn({
+                log.warning({
                     "event":"SPM.QUEUE.EMPTY",
                     "elapsed_time":HF.format_timespan(elapsed_time),
                     "max_idle_time": params.max_idle_time

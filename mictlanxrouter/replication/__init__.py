@@ -33,30 +33,39 @@ class Pagination(object):
         self.current_position = 0
         self.counter          = 0
         self.percentage       = 0.0
+        self.end              = batch_size
 
     def reset(self,n:int= -1):
         self.n = self.n if n <= 0 else n
         self.current_position = 0
         self.__completed = False
         self.counter  = 0
+        self.end  = self.batch_size
+    def soft_next(self):
+        return self.current_position, self.end, self.__completed
     def next(self):
         # if self.completed:
             # return self.current_position,,self.__completed
             # self.current_position = 0
             # self.completed = False
 
-        start = self.current_position
-        end = min(self.current_position + self.batch_size, self.n)
+        # if self.counter ==0:
+        # start = self.current_position
+        # start = self.end % self.n
+        self.current_position = self.end % self.n
+        self.end = min(self.current_position + self.batch_size, self.n)
         
-        if end == self.n:
+        # self.end = end
+        
+        if self.end == self.n:
             self.__completed = False if self.counter ==0 else True
-        else:
-            self.current_position = end % self.n
+        # else:
+            # self.current_position = self.end % self.n
         
         self.counter += 1
         self.percentage = 0.0 if self.n ==0  else 100.0 if self.__completed else float(100*self.current_position)/float(self.n)
         # self.percentage =  
-        return start, end, self.__completed
+        return self.current_position, self.end, self.__completed
     
     def prev(self):
         if self.current_position == 0:
@@ -75,7 +84,10 @@ class Pagination(object):
     def to_dict(self):
         return self.__dict__
     def __str__(self):
-        return J.dumps(self.__dict__,indent=4)
+        # end = min(self.current_position + self.batch_size, self.n)
+        x = self.__dict__
+        # x["end"]=end 
+        return J.dumps(x,indent=4)
 class ReplicaManagerParams(object):
     def __init__(self, 
         queue_max_idle_timeout:str="30s",
@@ -317,259 +329,259 @@ class ReplicaManager(object):
                 # self.key_replicas.get("{}@{}".format(bucket_id,key),[]))
             return current
     async def create_replicas(self, bucket_id:str,key:str,size:int=0,rf:int = 1, peer_ids:List[str]=[])->CreateReplicasResult :
-        with self.tracer.start_as_current_span("rm.create.replicas") as span:
-            span:Span          = span
-            start_time         = T.time()
-            available_peer_ids = await self.get_available_peers_ids(
+        # with self.tracer.start_as_current_span("rm.create.replicas") as span:
+        # span:Span          = span
+        start_time         = T.time()
+        available_peer_ids = await self.get_available_peers_ids(
+            bucket_id=bucket_id,
+            key=key,
+            size=size
+        )
+        
+        if len(available_peer_ids) ==0:
+            return CreateReplicasResult.empty(
+                bucket_id=bucket_id,
+                key=key
+            )
+        # print("AVAILABLE", available_placement_peer_ids_replicas)
+        # CR = [p1,p2]   rf = 2
+        # TR = [p1,p2,p3] rf = 3
+        
+        n_selected_peers              = len(peer_ids)
+        n_available_peers             = len(available_peer_ids)
+        current_replicas_ids          = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+        target_selected_peers_ids = list(filter(lambda x:  not x in current_replicas_ids, peer_ids))
+        
+        current_rf                          = len(current_replicas_ids)
+        _rf                                  = rf if n_selected_peers == 0 else len(target_selected_peers_ids)
+        diff_rf                             = _rf - current_rf if _rf > current_rf else 0
+        if _rf <=  current_rf:
+            return CreateReplicasResult.empty(
                 bucket_id=bucket_id,
                 key=key,
-                size=size
+                current_replicas=current_replicas_ids
             )
-            
-            if len(available_peer_ids) ==0:
-                return CreateReplicasResult.empty(
-                    bucket_id=bucket_id,
-                    key=key
-                )
-            # print("AVAILABLE", available_placement_peer_ids_replicas)
-            # CR = [p1,p2]   rf = 2
-            # TR = [p1,p2,p3] rf = 3
-            
-            n_selected_peers              = len(peer_ids)
-            n_available_peers             = len(available_peer_ids)
-            current_replicas_ids          = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-            target_selected_peers_ids = list(filter(lambda x:  not x in current_replicas_ids, peer_ids))
-            
-            current_rf                          = len(current_replicas_ids)
-            _rf                                  = rf if n_selected_peers == 0 else len(target_selected_peers_ids)
-            diff_rf                             = _rf - current_rf if _rf > current_rf else 0
-            if _rf <=  current_rf:
-                return CreateReplicasResult.empty(
-                    bucket_id=bucket_id,
-                    key=key,
-                    current_replicas=current_replicas_ids
-                )
 
-            span.set_attributes({
-                "bucket_id":bucket_id,
-                "key":key,
-                "size":size,
-                "rf":_rf,
-                "current_rf":current_rf,
-                "diff_rf":diff_rf,
-                "current_replicas":current_replicas_ids,
-                "available_peers":available_peer_ids,
-                "n_available_peers":n_available_peers,
-                "selected_peers":peer_ids
-            })
-         
-            if  diff_rf == 0:
-                replicas  = set(peer_ids).union(set(current_replicas_ids))
-                span.add_event(name="replication.factor.reached", attributes={
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "current_rf":current_rf,
-                    "target_rf":_rf
-                })
-                return CreateReplicasResult(
-                    bucket_id=bucket_id,
-                    key=key,
-                    success_replicas=[],
-                    failed_replicas=[],
-                    available_replicas=available_peer_ids,
-                    no_found_peers=[],
-                    replicas=current_replicas_ids
-                )
-            
+        # span.set_attributes({
+        #     "bucket_id":bucket_id,
+        #     "key":key,
+        #     "size":size,
+        #     "rf":_rf,
+        #     "current_rf":current_rf,
+        #     "diff_rf":diff_rf,
+        #     "current_replicas":current_replicas_ids,
+        #     "available_peers":available_peer_ids,
+        #     "n_available_peers":n_available_peers,
+        #     "selected_peers":peer_ids
+        # })
+        
+        if  diff_rf == 0:
+            replicas  = set(peer_ids).union(set(current_replicas_ids))
+            # span.add_event(name="replication.factor.reached", attributes={
+            #     "bucket_id":bucket_id,
+            #     "key":key,
+            #     "current_rf":current_rf,
+            #     "target_rf":_rf
+            # })
+            return CreateReplicasResult(
+                bucket_id=bucket_id,
+                key=key,
+                success_replicas=[],
+                failed_replicas=[],
+                available_replicas=available_peer_ids,
+                no_found_peers=[],
+                replicas=current_replicas_ids
+            )
+        
 
-            # No selected peers and RF is lower than the number of available peers
-            if n_selected_peers == 0 and diff_rf <= n_available_peers:
-                replica_peer_ids = available_peer_ids[:diff_rf]
-                # ____________________________________
-                x = await self.__create_replicas(
-                    bucket_id=bucket_id,
-                    key=key,
-                    replica_peer_ids=replica_peer_ids
-                )
-                # UPDATE UFS
-                await self.spm.puts(peer_ids=replica_peer_ids, size = size)
-                replicas = list(set(current_replicas_ids+ replica_peer_ids))
-                __available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key)
-                span.add_event(name="create.replicas.successfully", attributes={
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "n_selected_peer"
-                    "selected_replicas":replica_peer_ids,
-                    "replicas":replicas,
-                    "available_peers":__available_replicas,
-                    "n_selected_peers":n_selected_peers,
-                    "diff_rf":diff_rf,
-                    "n_available_peers":n_selected_peers,
-                    "available_peers":available_peer_ids,
-                    "selected_peers":peer_ids
-                    # "failed_replicas":[],
-                    # "no_found_peers":[]
-                })
+        # No selected peers and RF is lower than the number of available peers
+        if n_selected_peers == 0 and diff_rf <= n_available_peers:
+            replica_peer_ids = available_peer_ids[:diff_rf]
+            # ____________________________________
+            x = await self.__create_replicas(
+                bucket_id=bucket_id,
+                key=key,
+                replica_peer_ids=replica_peer_ids
+            )
+            # UPDATE UFS
+            await self.spm.puts(peer_ids=replica_peer_ids, size = size)
+            replicas = list(set(current_replicas_ids+ replica_peer_ids))
+            __available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key)
+            # span.add_event(name="create.replicas.successfully", attributes={
+            #     "bucket_id":bucket_id,
+            #     "key":key,
+            #     "n_selected_peer"
+            #     "selected_replicas":replica_peer_ids,
+            #     "replicas":replicas,
+            #     "available_peers":__available_replicas,
+            #     "n_selected_peers":n_selected_peers,
+            #     "diff_rf":diff_rf,
+            #     "n_available_peers":n_selected_peers,
+            #     "available_peers":available_peer_ids,
+            #     "selected_peers":peer_ids
+            #     # "failed_replicas":[],
+            #     # "no_found_peers":[]
+            # })
+            # self.__log.info({
+            #         "event":"CREATE.REPLICAS",
+            #         "bucket_id":bucket_id,
+            #         "key":key,
+            #         "index":0,
+            #         "replicas":replicas,
+            #         "response_time":T.time() - start_time
+            # })
+            return CreateReplicasResult(
+                bucket_id          = bucket_id,
+                key                = key,
+                replicas           = replicas,
+                success_replicas   = replica_peer_ids,
+                available_replicas = __available_replicas,
+                failed_replicas    = [],
+                no_found_peers     = []
+            )
+        # No selected peers and RF is greater than number of availabler peers
+        elif n_selected_peers ==0  and diff_rf > n_available_peers:
+            if self.elastic:
+                res = await self.spm.active_deploy_peers(rf=diff_rf - n_available_peers)
+                replicas = list(set(current_replicas_ids+res.success_peers))
+                # res.success_peers
+                x = await self.__create_replicas(bucket_id=bucket_id,key=key, replica_peer_ids=replicas)
                 # self.__log.info({
                 #         "event":"CREATE.REPLICAS",
                 #         "bucket_id":bucket_id,
                 #         "key":key,
-                #         "index":0,
+                #         "index":1,
                 #         "replicas":replicas,
                 #         "response_time":T.time() - start_time
                 # })
+                # span.add_event(name="create.replicas.successfully", attributes={
+                #     "bucket_id":bucket_id,
+                #     "key":key,
+                #     "n_selected_peer"
+                #     "selected_replicas":replica_peer_ids,
+                #     "replicas":replicas,
+                #     "n_selected_peers":n_selected_peers,
+                #     "diff_rf":diff_rf,
+                #     "n_available_peers":n_available_peers,
+                #     "available_peers":available_peer_ids,
+                #     "selected_peers":peer_ids
+                # })
                 return CreateReplicasResult(
-                    bucket_id          = bucket_id,
-                    key                = key,
-                    replicas           = replicas,
-                    success_replicas   = replica_peer_ids,
-                    available_replicas = __available_replicas,
-                    failed_replicas    = [],
-                    no_found_peers     = []
+                    bucket_id=bucket_id,
+                    key= key,
+                    replicas=replicas,
+                    failed_replicas=res.failed_peers,
+                    available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
+                    success_replicas=res.success_peers,
+
                 )
-            # No selected peers and RF is greater than number of availabler peers
-            elif n_selected_peers ==0  and diff_rf > n_available_peers:
-                if self.elastic:
-                    res = await self.spm.active_deploy_peers(rf=diff_rf - n_available_peers)
-                    replicas = list(set(current_replicas_ids+res.success_peers))
-                    # res.success_peers
-                    x = await self.__create_replicas(bucket_id=bucket_id,key=key, replica_peer_ids=replicas)
-                    # self.__log.info({
-                    #         "event":"CREATE.REPLICAS",
-                    #         "bucket_id":bucket_id,
-                    #         "key":key,
-                    #         "index":1,
-                    #         "replicas":replicas,
-                    #         "response_time":T.time() - start_time
-                    # })
-                    span.add_event(name="create.replicas.successfully", attributes={
-                        "bucket_id":bucket_id,
-                        "key":key,
-                        "n_selected_peer"
-                        "selected_replicas":replica_peer_ids,
-                        "replicas":replicas,
-                        "n_selected_peers":n_selected_peers,
-                        "diff_rf":diff_rf,
-                        "n_available_peers":n_available_peers,
-                        "available_peers":available_peer_ids,
-                        "selected_peers":peer_ids
-                    })
-                    return CreateReplicasResult(
-                        bucket_id=bucket_id,
-                        key= key,
-                        replicas=replicas,
-                        failed_replicas=res.failed_peers,
-                        available_replicas = await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
-                        success_replicas=res.success_peers,
-
-                    )
-                else:
-                    # self.__log.info({
-                    #         "event":"CREATE.REPLICAS",
-                    #         "bucket_id":bucket_id,
-                    #         "key":key,
-                    #         "index":1,
-                    #         "replicas":current_replicas_ids,
-                    #         "response_time":T.time() - start_time
-                    # })
-                    return CreateReplicasResult(
-                        bucket_id=bucket_id,
-                        key= key,
-                        replicas=current_replicas_ids,
-                    )
-                
-            elif n_selected_peers >=1 and diff_rf <= n_available_peers:
-                # if diff_rf <= n_selected_peers:
-                selected_peers     = await self.spm.from_peer_ids_to_peers(peer_ids=target_selected_peers_ids)
-                _selected_peer_ids = set(list(map(lambda p: p.peer_id, selected_peers)))
-
-                new_replicas_peer_ids = _selected_peer_ids.difference(set(current_replicas_ids)) 
-                new_current_replicas = new_replicas_peer_ids.union(current_replicas_ids)
-
-                replica_peer_ids = list(new_current_replicas)
-                create_replicas_result = await self.__create_replicas(bucket_id=bucket_id,key=key,replica_peer_ids=replica_peer_ids)
-                replicas = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-
-                span.add_event(name="create.replicas.successfully", attributes={
-                    "bucket_id":bucket_id,
-                    "key":key,
-                    "n_selected_peer"
-                    "selected_replicas":replica_peer_ids,
-                    "replicas":replicas,
-                    "n_selected_peers":n_selected_peers,
-                    "diff_rf":diff_rf,
-                    "n_available_peers":n_available_peers,
-                    "available_peers":available_peer_ids,
-                    "selected_peers":peer_ids
-                })
+            else:
                 # self.__log.info({
                 #         "event":"CREATE.REPLICAS",
                 #         "bucket_id":bucket_id,
                 #         "key":key,
-                #         "index":2,
-                #         "replicas":replica_peer_ids,
+                #         "index":1,
+                #         "replicas":current_replicas_ids,
                 #         "response_time":T.time() - start_time
                 # })
                 return CreateReplicasResult(
                     bucket_id=bucket_id,
-                    key=key,
-                    available_replicas=await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
-                    failed_replicas=[],
-                    no_found_peers=[],
-                    replicas=replicas,
-                    success_replicas=replica_peer_ids,
+                    key= key,
+                    replicas=current_replicas_ids,
                 )
             
-                # else:
-                #     # available_replicas = self.get_available_peers_ids(bucket_id=bucket_id,key=key)
-                #     # replicas           =  await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-                #     self.__log.warning({
-                #         "event":"ELASTICITY.DEACTIVATED",
-                #         "bucket_id":bucket_id,
-                #         "key":key,
-                #         "available_replicas":available_peer_ids,
-                #         "replicas":current_replicas_ids
-                #     })
-                #     return CreateReplicasResult(
-                #         bucket_id=bucket_id,
-                #         key=key,
-                #         available_replicas=available_peer_ids,
-                #         failed_replicas=[],
-                #         no_found_peers= [],
-                #         replicas=replicas,
-                #         success_replicas=[]
-                #     )
-                    # print("ELASTIC_SECOND")
-            elif n_selected_peers >=1  and diff_rf > n_available_peers:
-                if not self.elastic:
-                    # self.__log.info({
-                    #     "event":"CREATE.REPLICAS",
-                    #     "bucket_id":bucket_id,
-                    #     "key":key,
-                    #     "index":3,
-                    #     "replicas":[],
-                    #     "response_time":T.time() - start_time
-                    # })
-                    span.add_event(name="elasticity.disabled",attributes={"bucket_id":bucket_id,"key":key})
-                    return CreateReplicasResult(
-                        bucket_id=bucket_id,
-                        key=key,
-                        available_replicas=[],
-                        failed_replicas=[],
-                        no_found_peers=[],
-                        replicas=current_replicas_ids
-                    )
-                else:
-                    span.add_event(name="create.replicas.elastically", attributes={"bucket_id":bucket_id,"key":key})
-                    # self.__log.info({
-                    #     "event":"CREATE.REPLICAS",
-                    #     "bucket_id":bucket_id,
-                    #     "key":key,
-                    #     "index":3,
-                    #     "replicas":current_replicas_ids,
-                    #     "response_time":T.time() - start_time
-                    # })
-                    return CreateReplicasResult.empty(bucket_id=bucket_id,key=key, current_replicas=current_replicas_ids)
+        elif n_selected_peers >=1 and diff_rf <= n_available_peers:
+            # if diff_rf <= n_selected_peers:
+            selected_peers     = await self.spm.from_peer_ids_to_peers(peer_ids=target_selected_peers_ids)
+            _selected_peer_ids = set(list(map(lambda p: p.peer_id, selected_peers)))
+
+            new_replicas_peer_ids = _selected_peer_ids.difference(set(current_replicas_ids)) 
+            new_current_replicas = new_replicas_peer_ids.union(current_replicas_ids)
+
+            replica_peer_ids = list(new_current_replicas)
+            create_replicas_result = await self.__create_replicas(bucket_id=bucket_id,key=key,replica_peer_ids=replica_peer_ids)
+            replicas = await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+
+            # span.add_event(name="create.replicas.successfully", attributes={
+            #     "bucket_id":bucket_id,
+            #     "key":key,
+            #     "n_selected_peer"
+            #     "selected_replicas":replica_peer_ids,
+            #     "replicas":replicas,
+            #     "n_selected_peers":n_selected_peers,
+            #     "diff_rf":diff_rf,
+            #     "n_available_peers":n_available_peers,
+            #     "available_peers":available_peer_ids,
+            #     "selected_peers":peer_ids
+            # })
+            # self.__log.info({
+            #         "event":"CREATE.REPLICAS",
+            #         "bucket_id":bucket_id,
+            #         "key":key,
+            #         "index":2,
+            #         "replicas":replica_peer_ids,
+            #         "response_time":T.time() - start_time
+            # })
+            return CreateReplicasResult(
+                bucket_id=bucket_id,
+                key=key,
+                available_replicas=await self.get_available_peers_ids(bucket_id=bucket_id,key=key),
+                failed_replicas=[],
+                no_found_peers=[],
+                replicas=replicas,
+                success_replicas=replica_peer_ids,
+            )
+        
+            # else:
+            #     # available_replicas = self.get_available_peers_ids(bucket_id=bucket_id,key=key)
+            #     # replicas           =  await self.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+            #     self.__log.warning({
+            #         "event":"ELASTICITY.DEACTIVATED",
+            #         "bucket_id":bucket_id,
+            #         "key":key,
+            #         "available_replicas":available_peer_ids,
+            #         "replicas":current_replicas_ids
+            #     })
+            #     return CreateReplicasResult(
+            #         bucket_id=bucket_id,
+            #         key=key,
+            #         available_replicas=available_peer_ids,
+            #         failed_replicas=[],
+            #         no_found_peers= [],
+            #         replicas=replicas,
+            #         success_replicas=[]
+            #     )
+                # print("ELASTIC_SECOND")
+        elif n_selected_peers >=1  and diff_rf > n_available_peers:
+            if not self.elastic:
+                # self.__log.info({
+                #     "event":"CREATE.REPLICAS",
+                #     "bucket_id":bucket_id,
+                #     "key":key,
+                #     "index":3,
+                #     "replicas":[],
+                #     "response_time":T.time() - start_time
+                # })
+                # span.add_event(name="elasticity.disabled",attributes={"bucket_id":bucket_id,"key":key})
+                return CreateReplicasResult(
+                    bucket_id=bucket_id,
+                    key=key,
+                    available_replicas=[],
+                    failed_replicas=[],
+                    no_found_peers=[],
+                    replicas=current_replicas_ids
+                )
+            else:
+                # span.add_event(name="create.replicas.elastically", attributes={"bucket_id":bucket_id,"key":key})
+                # self.__log.info({
+                #     "event":"CREATE.REPLICAS",
+                #     "bucket_id":bucket_id,
+                #     "key":key,
+                #     "index":3,
+                #     "replicas":current_replicas_ids,
+                #     "response_time":T.time() - start_time
+                # })
+                return CreateReplicasResult.empty(bucket_id=bucket_id,key=key, current_replicas=current_replicas_ids)
                 # print("ELASTIC WITH SELECTEd")
 
         
