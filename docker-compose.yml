@@ -1,6 +1,6 @@
 services:
   mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.0.160-alpha.0
+    image: nachocode/mictlanx:router-0.0.160-alpha.4
     container_name:  mictlanx-router-0
     environment:
       - TEZCANALYTICX_ENABLED=${TEZCANALYTICX_ENABLED:-0}

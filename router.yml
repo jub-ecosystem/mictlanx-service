@@ -1,7 +1,7 @@
 services:
   
   mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.0.160-alpha.1
+    image: nachocode/mictlanx:router-0.0.160-alpha.4
     container_name: mictlanx-router-0
     environment:
       - MICTLANX_ROUTER_SERVICE_NAME=${MICTLANX_ROUTER_SERVICE_NAME:-mictlanx-router}
