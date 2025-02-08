@@ -1,24 +1,21 @@
 from mictlanx.logger.log import Log
 import asyncio
-import math
 import humanfriendly as HF
 import json as J
 import time as T
 from typing import List,Dict
-from option import Option, NONE, Some
-from mictlanxrouter.peer_manager import StoragePeerManager
-from mictlanxrouter.replication import ReplicaManager,Pagination
+from mictlanxrouter.replication_manager import ReplicaManager,Pagination
 import mictlanx.v4.interfaces as InterfaceX
 import os 
 from logging import LogRecord
 
 
-MICTLANX_RM_LOG_NAME     = os.environ.get("MICTLANX_RM_LOG_NAME","mictlanx-rm-0")
-MICTLANX_RM_LOG_INTERVAL = int(os.environ.get("MICTLANX_RM_LOG_INTERVAL","24"))
-MICTLANX_RM_LOG_WHEN     = os.environ.get("MICTLANX_RM_LOG_WHEN","h")
-MICTLANX_RM_LOG_SHOW     = bool(int(os.environ.get("MICTLANX_RM_LOG_SHOW","1")))
-MICTLANX_RM_LOG_SHOW_WARM     = bool(int(os.environ.get("MICTLANX_RM_LOG_SHOW_WARM","0")))
-LOG_PATH                     = os.environ.get("LOG_PATH","/log")
+MICTLANX_RM_LOG_NAME      = os.environ.get("MICTLANX_RM_LOG_NAME","mictlanx-rm-0")
+MICTLANX_RM_LOG_INTERVAL  = int(os.environ.get("MICTLANX_RM_LOG_INTERVAL","24"))
+MICTLANX_RM_LOG_WHEN      = os.environ.get("MICTLANX_RM_LOG_WHEN","h")
+MICTLANX_RM_LOG_SHOW      = bool(int(os.environ.get("MICTLANX_RM_LOG_SHOW","1")))
+MICTLANX_RM_LOG_SHOW_WARM = bool(int(os.environ.get("MICTLANX_RM_LOG_SHOW_WARM","0")))
+LOG_PATH                  = os.environ.get("LOG_PATH","/log")
 
 def log_filter(x:LogRecord):
     if x.levelname == "WARNING" and MICTLANX_RM_LOG_SHOW_WARM:
@@ -101,6 +98,10 @@ async def run_rm(
             # current_start_index =  params.batch_index*params.batch_size 
             # current_end_index   = current_start_index + params.batch_size 
             peers               = await rm.spm.get_available_peers()
+            if len(peers)==0:
+                log.warning("No available storage peers.")
+                continue
+            # print("CURRENT", peers)
             current_total_balls_map:Dict[str,int]      = dict([ (p.peer_id,p.get_balls_len().unwrap_or(0)) for p in peers])
 
             total_n_balls = sum(list(current_total_balls_map.values()))

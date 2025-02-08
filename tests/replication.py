@@ -2,7 +2,7 @@
 import unittest as UT
 import time as T
 import asyncio
-from mictlanxrouter.replication import ReplicaManager,Pagination,ReplicaManagerParams
+from mictlanxrouter.replication_manager import ReplicaManager,Pagination,ReplicaManagerParams
 from mictlanxrouter.peer_manager.healer import StoragePeerManager
 from mictlanx.v4.interfaces.index import Peer,PeerStats
 from mictlanx.v4.summoner.summoner import Summoner

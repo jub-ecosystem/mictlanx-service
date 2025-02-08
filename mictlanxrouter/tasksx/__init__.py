@@ -1,18 +1,8 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from option import Result,Ok,Err
 import aiorwlock
 from typing import List
-
-@dataclass
-class TaskX:
-    task_id:str
-    operation:str
-    bucket_id:str
-    key:str
-    size:int
-    peer_id:str=""
-    content_type:str="application/octet-stream"
+from mictlanxrouter.dto import TaskX
 
 class TaskManagerX(ABC):
     def __init__(self,max_tasks:int = 100,max_concurrency:int = 1,fast:bool= True ):

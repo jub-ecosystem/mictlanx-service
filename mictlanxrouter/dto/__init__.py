@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 from typing import List
+from mictlanxrouter.dto.tasks import TaskX, TaskStatus,Operations
+
 class DisperseDataResult(BaseModel):
     base_id:str
     fragments:List[bytes]

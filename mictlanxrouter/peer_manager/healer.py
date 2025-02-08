@@ -878,7 +878,10 @@ class StoragePeerManager:
                         
                         # self.__log.error("Peer {} is not available.".format(peer.peer_id))
                     
-                    percentage_available_peers =  (counter / (len(await self.get_available_peers()) + len(await self.get_unavailable_peers())) )*100 
+                    
+                    denominator = (len(await self.get_available_peers()) + len(await self.get_unavailable_peers()))
+
+                    percentage_available_peers = 0 if denominator ==0 else (counter / denominator ) *100 
                     if percentage_available_peers == 0:
                         span.set_status(status=Status(StatusCode.ERROR))
                         span.add_event(name="spm.peers.ALL.UNAVAIABLE", attributes={
