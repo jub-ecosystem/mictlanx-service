@@ -221,7 +221,7 @@ class StoragePeerManager:
             peer_index =  i + n
             peer_id = "mictlanx-peer-{}".format(peer_index)
             port = params.base_port + peer_index
-            selected_node = (n+i)%len(self.physical_nodes_indexes)
+            selected_node = (n+i)%len(self.params.physical_nodes_indexes)
             (container_id, port, result) = await self.deploy_peer(
                 container_id=peer_id,
                 port=port,
@@ -475,6 +475,7 @@ class StoragePeerManager:
         async with self.lock.reader_lock:
             return len(self.unavailable_peers)
 
+    
     async def get_unavailable_peers_ids(self):
         async with self.lock.reader_lock:
             return list(set(list(map(lambda x:x.peer_id, self.unavailable_peers))))

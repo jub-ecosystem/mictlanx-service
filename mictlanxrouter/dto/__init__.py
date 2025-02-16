@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List
+from mictlanxrouter.dto.index import DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.dto.tasks import TaskX, TaskStatus,Operations
 
 class DisperseDataResult(BaseModel):

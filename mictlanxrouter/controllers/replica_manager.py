@@ -38,3 +38,28 @@ class ReplicaManagerController():
                 )
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))   
+        @self.router.get("/api/v4/accessmap")
+        async def get_access_map(start:int=0, end:int =0,no_access:bool = True):
+            try:
+                x = await self.replica_manager.get_access_replica_map()
+                if end <=0:
+                    _end = len(x)
+                else:
+                    _end = end
+                
+                if start >= _end:
+                    _start=0
+                else :
+                    _start = start
+                
+
+                filtered_x = filter(lambda b: b[1] > 0 or no_access ,x.items())
+                # filtered_x = filter(lambda b: b[1] > 0 or no_access ,x.items())
+                xs = dict(list(  filtered_x   )[_start:_end] )
+                xs = dict(sorted(xs.items(), key=lambda x:x[1]))
+                
+                return JSONResponse(
+                    content=jsonable_encoder( xs  )
+                )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))

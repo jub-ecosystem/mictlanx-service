@@ -7,17 +7,13 @@ import aiorwlock
 import signal
 from asyncio.queues import Queue
 import asyncio
-from fastapi import FastAPI,Response,HTTPException,Header,UploadFile,Request
-# import tempfile
-# from secretsharing import PlaintextToHexSecretSharer
-
+from fastapi import FastAPI,Response,HTTPException,UploadFile,Request
+#
 from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from typing import Iterator
-from typing_extensions import Annotated
 from option import Result,Some,Ok,Err
 from fastapi.middleware.gzip import GZipMiddleware
 from ipaddress import IPv4Network
@@ -26,7 +22,6 @@ import mictlanxrouter.caching as ChX
 import mictlanxrouter.controllers as Cx
 from mictlanxrouter.replication_manager import ReplicaManager,ReplicaManagerParams,DataReplicator
 from mictlanxrouter.dto.metadata import Metadata
-from mictlanxrouter.dto.index import DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.peer_manager.healer import StoragePeerManager,StoragePeerManagerParams
 from mictlanxrouter.dto.index import PeerElasticPayload
 # 
@@ -173,7 +168,7 @@ MICTLANX_DATA_REPLICATOR_QUEUE_HEARTBEAT  = os.environ.get("MICTLANX_REPLICATOR_
 MICTLANX_DATA_REPLICATOR_MAX_IDLE_TIMEOUT = os.environ.get("MICTLANX_DATA_REPLICATOR_MAX_IDLE_TIMEOUT","1hr")
 # Client
 # MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:25000 mictlanx-peer-1:localhost:25001 mictlanx-peer-2:localhost:25002")
-MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:24000")
+MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:24000 mictlanx-peer-1:localhost:24001")
 MICTLANX_PROTOCOL    = os.environ.get("MICTLANX_PROCOTOL","http")
 MICTLANX_PEERS       = [] if MICTLANX_PEERS_STR == "" else list(Utils.peers_from_str_v2(peers_str=MICTLANX_PEERS_STR,separator=" ", protocol=MICTLANX_PROTOCOL,) )
 MICTLANX_API_VERSION = os.environ.get("MICTLANX_API_VERSION","4")
@@ -420,101 +415,6 @@ async def update_metadata(
 
 # ======================= PUT ============================
 
-@app.post("/api/v4/buckets/data/{task_id}/chunked")
-async def put_data_chunked(
-    task_id:str,
-    request: Request,
-):
-    with tracer.start_as_current_span("put.chunked") as span:
-        span:Span = span
-        start_time = T.time()
-        try:
-            # ======================= GET TASK ============================
-            gt_start_time = T.time_ns()
-            task_maybe = await tm.get_task(task_id=task_id)
-            if task_maybe.is_err:
-                raise task_maybe.unwrap_err()
-            
-            span.add_event(name="get.task",attributes={"task_id":task_id}, timestamp=gt_start_time)
-            task = task_maybe.unwrap()
-            span.set_attributes({
-                "task_id":task_id,
-                **task.__dict__
-            })
-
-            # ======================= GET PEER ============================
-            gt_start_time = T.time_ns()
-            maybe_peer = await storage_peer_manager.get_peer_by_id(peer_id=task.peers)
-            if maybe_peer.is_none:
-                raise HTTPException(status_code=404, detail="No peers available")
-            else:
-                peer = maybe_peer.unwrap()
-            span.add_event(name="get.peer",attributes={"task_id":task_id, "peer_id":task.peers}, timestamp=gt_start_time)
-
-            # ======================= PUT_CHUNKS ============================
-            gt_start_time = T.time_ns()
-            headers= {}
-            chunks = request.stream()
-            result = await peer.put_chuncked_async(task_id=task_id, chunks = chunks,headers=headers)
-            if result.is_err:
-                raise result.unwrap_err()
-
-            response = result.unwrap()
-            span.add_event(name="put.chunked",attributes={"task_id":task_id, "peer_id":task.peers}, timestamp=gt_start_time)
-            # ======================= DELETE TASK ============================
-            gt_start_time = T.time_ns()
-            res = await tm.delete_task(task_id=task_id)
-            span.add_event(name="delete.task",attributes={"task_id":task_id}, timestamp=gt_start_time)
-            # 
-            log.info({
-                "event":"PUT.DATA",
-                "x_timestamp":T.time_ns(),
-                "bucket_id":task.bucket_id,
-                "key":task.key,
-                "size":task.size,
-                "task_id":task_id,
-                "peer_id":task.peers,
-                "content_type":task.content_type,
-                "deleted_tasks":res.is_ok,
-                "response_time":T.time() - start_time
-            })
-
-            return JSONResponse(content=jsonable_encoder(response))
-
-        except HTTPException as e:
-            log.error({
-                "event":"HTTP.EXCEPTION",
-                "detail":e.detail,
-                "status_code":e.status_code
-            })
-            raise HTTPException(status_code=500, detail = str(e))
-        except R.exceptions.HTTPError as e:
-            detail = str(e.response.content.decode("utf-8") )
-            # e.response.reason
-            status_code = e.response.status_code
-            log.error({
-                "event":"HTTPError",
-                "detail":detail,
-                "status_code":status_code,
-                "reason":e.response.reason,
-            })
-            raise HTTPException(status_code=status_code, detail=detail  )
-        except R.exceptions.ConnectionError as e:
-            detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-            log.error({
-                "event":"CONNECTION.ERROR",
-                "detail":detail,
-                "status_code":500
-            })
-            raise HTTPException(status_code=500, detail=detail  )
-        except Exception as e:
-            log.error({
-                "event":"EXCEPTION",
-                "detail":str(e),
-                "status_code":500
-            })
-            raise HTTPException(status_code=500, detail = str(e))
-
 
 
 # > ======================= PUT ============================
@@ -567,199 +467,7 @@ async def elastic(
 
 
 
-@app.delete("/api/v4/buckets/{bucket_id}/{key}")
-async def delete_data_by_key(
-    bucket_id:str,
-    key:str,
-):
-    with tracer.start_as_current_span("delete") as span:
-        span:Span = span
-        span.set_attributes({"bucket_id":bucket_id, "key":key})
-        _bucket_id = Utils.sanitize_str(x=bucket_id)
-        _key = Utils.sanitize_str(x=key)
-        try:
 
-            start_time= T.time()
-            gcr_timestamp = T.time_ns()
-            peers = await replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
-            span.add_event(name="get.replicas",attributes={},timestamp=gcr_timestamp)
-            default_delete_by_key_response = DeletedByKeyResponse(n_deletes=0,key=_key)
-            for peer in  peers:
-                timestamp = T.time_ns()
-                result = peer.delete(bucket_id=_bucket_id, key= _key, timeout=30)
-                if result.is_ok:
-                    res = result.unwrap()
-                    # print("PEER.DELETE.RESULT", res)
-                    log.debug({
-                        "event":"PEER.DELETE",
-                        "peer_id":peer.peer_id,
-                        "bucket_id":_bucket_id,
-                        "key":_key,
-                        "n_deletes":res.n_deletes
-                    })
-                    if res.n_deletes>=0:
-                        default_delete_by_key_response.n_deletes+= res.n_deletes
-                        span.add_event(name="{}.delete".format(peer.peer_id), timestamp=timestamp)
-            response_time = T.time() - start_time
-            timestamp     = T.time_ns()
-            res           = await replica_manager.remove_replicas(bucket_id=bucket_id,key=key)
-            span.add_event(name="remove.replicas", attributes={}, timestamp=timestamp)
-            log.info({
-                "event":"DELETED.BY.KEY",
-                "bucket_id":_bucket_id,
-                "key":_key,
-                "replicas":res,
-                "n_deletes":default_delete_by_key_response.n_deletes,
-                "response_time":response_time,
-            })
-            
-            return JSONResponse(content=jsonable_encoder(default_delete_by_key_response.model_dump()))
-        except R.exceptions.HTTPError as e:
-                detail = str(e.response.content.decode("utf-8") )
-                status_code = e.response.status_code
-                log.error({
-                    "detail":detail,
-                    "status_code":status_code,
-                    "reason":e.response.reason,
-                })
-                raise HTTPException(status_code=status_code, detail=detail  )
-        except R.exceptions.ConnectionError as e:
-            detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-            log.error({
-                "detail":detail,
-                "status_code":500
-            })
-            raise HTTPException(status_code=500, detail=detail  )
-
-@app.delete("/api/v4/buckets/{bucket_id}/bid/{ball_id}")
-async def delete_data_by_ball_id(
-    bucket_id:str,
-    ball_id:str,
-):
-
-    with tracer.start_as_current_span("delete") as span:
-        span:Span = span 
-        _bucket_id = Utils.sanitize_str(x= bucket_id)
-        _ball_id = Utils.sanitize_str(x= ball_id)
-
-        start_time= T.time()
-
-        gcr_timestamp = T.time_ns()
-        peers = await replica_manager.get_current_replicas(bucket_id=bucket_id,key=_ball_id)
-        span.add_event(name="get.replicas",attributes={},timestamp=gcr_timestamp)
-        headers = {}
-        combined_key = ""
-        _start_time = T.time()
-        try:
-            default_del_by_ball_id_response = DeletedByBallIdResponse(n_deletes=0, ball_id=_ball_id)
-            for peer in  peers:
-                start_time = T.time()
-                chunks_metadata_result:Result[Iterator[Metadata],Exception] = peer.get_chunks_metadata(
-                    key=_ball_id,
-                    bucket_id=_bucket_id,
-                    headers=headers
-                )
-                # print("CHUNK_M_RESULT",chunks_metadata_result)
-                if chunks_metadata_result.is_ok:
-                    response = chunks_metadata_result.unwrap()
-                    for i,metadata in enumerate(response):
-                        timestamp = T.time_ns()
-                        if i ==0:
-                            combined_key = "{}@{}".format(metadata.bucket_id,metadata.key)
-
-                        del_result = peer.delete(bucket_id=_bucket_id, key=metadata.key)
-                        service_time = T.time() - start_time
-                        if del_result.is_ok:
-                            del_response = del_result.unwrap()
-                            if del_response.n_deletes>=0:
-                                default_del_by_ball_id_response.n_deletes+= del_response.n_deletes
-                        span.add_event(
-                            name       = "{}.{}.delete".format(peer.peer_id, metadata.key),
-                            attributes = {"bucket_id":bucket_id, "key":metadata.key},
-                            timestamp  = timestamp
-                        )
-                        
-                        log.debug({
-                            "event":"DELETE.BY.BALL_ID",
-                            "bucket_id":_bucket_id,
-                            "ball_id":_ball_id,
-                            "key":metadata.key,
-                            "peer_id":peer.peer_id,
-                            "status":int(del_result.is_ok)-1,
-                            "service_time":service_time,
-                        })
-
-
-            if combined_key == "" or len(combined_key) ==0:
-                log.error({
-                    "event":"NOT.FOUND",
-                    "bucket_id":_bucket_id,
-                    "ball_id":_ball_id,
-                })
-                return JSONResponse(content=jsonable_encoder(default_del_by_ball_id_response.model_dump()))
-            log.info({
-                "event":"DELETED.BY.BALL_ID",
-                "bucket_id":_bucket_id,
-                "ball_id":_ball_id,
-                "n_deletes": default_del_by_ball_id_response.n_deletes,
-                "response_time":T.time() - _start_time,
-            })
-            return JSONResponse(content=jsonable_encoder(default_del_by_ball_id_response))
-        # Response(content=deleted_replicas, status_code=200)
-        except R.exceptions.HTTPError as e:
-            detail = str(e.response.content.decode("utf-8") )
-            status_code = e.response.status_code
-            log.error({
-                "detail":detail,
-                "status_code":status_code,
-                "reason":e.response.reason,
-            })
-            raise HTTPException(status_code=status_code, detail=detail  )
-        except R.exceptions.ConnectionError as e:
-            detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-            log.error({
-                "detail":detail,
-                "status_code":500
-            })
-            raise HTTPException(status_code=500, detail=detail  )
-
-@app.post("/api/v4/buckets/{bucket_id}/{key}/disable")
-async def disable(bucket_id:str, key:str,):
-    try:
-        headers = {}
-        start_time = T.time()
-        # async with peer_healer_rwlock.reader_lock:
-            # peers = storage_peer_manager.peers
-        peers = await replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
-        
-        for peer in peers:
-            res = peer.disable(bucket_id=bucket_id,key=key,headers=headers)
-        log.info({
-            "event":"DISABLE.COMPLETED",
-            "bucket_id":bucket_id,
-            "key":key,
-            "replicas":len(peers),
-            "service_time":T.time()-start_time
-        })
-        return Response(content=None, status_code=204)
-
-    except R.exceptions.HTTPError as e:
-        detail = str(e.response.content.decode("utf-8") )
-        status_code = e.response.status_code
-        log.error({
-            "detail":detail,
-            "status_code":status_code,
-            "reason":e.response.reason,
-        })
-        raise HTTPException(status_code=status_code, detail=detail  )
-    except R.exceptions.ConnectionError as e:
-        detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-        log.error({
-            "detail":detail,
-            "status_code":500
-        })
-        raise HTTPException(status_code=500, detail=detail  )
-        
 @app.post("/api/v4/buckets/{bucket_id}/metadata/{key}")
 async def put_metadatas(
     bucket_id:str,
@@ -874,30 +582,7 @@ async def get_size_by_key(bucket_id:str,key:str):
     except Exception as e:
         raise HTTPException(status_code = 500, detail="Uknown error: {}@{}".format(bucket_id,key))
 
-@app.get("/api/v4/accessmap")
-async def get_access_map(start:int=0, end:int =0,no_access:bool = False):
-    try:
-        x = await replica_manager.get_access_replica_map()
-        if end <=0:
-            _end = len(x)
-        else:
-            _end = end
-        
-        if start >= _end:
-            _start=0
-        else :
-            _start = start
-        
 
-        filtered_x = filter(lambda b: b[1] > 0 or no_access ,x.items())
-        xs = dict(list(  filtered_x   )[_start:_end] )
-        xs = dict(sorted(xs.items(), key=lambda x:x[1]))
-        
-        return JSONResponse(
-            content=jsonable_encoder( xs  )
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 

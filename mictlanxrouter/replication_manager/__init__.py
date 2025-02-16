@@ -183,8 +183,8 @@ class ReplicaManager(object):
         self.replica_map:Dict[str, List[str]] = {}
         self.spm = spm
         self.params_lock = aiorwlock.RWLock(fast=True)
-        self.lock = aiorwlock.RWLock(fast=True)
-        self.get_lock = aiorwlock.RWLock(fast=True)
+        self.lock        = aiorwlock.RWLock(fast=True)
+        self.get_lock    = aiorwlock.RWLock(fast=True)
         self.__log = Log(
             name = "mictlanx-router-rm-0",
             console_handler_filter=lambda x: show_logs,
