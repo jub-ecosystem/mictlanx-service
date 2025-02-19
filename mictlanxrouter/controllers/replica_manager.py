@@ -58,6 +58,8 @@ class ReplicaManagerController():
                 xs = dict(list(  filtered_x   )[_start:_end] )
                 xs = dict(sorted(xs.items(), key=lambda x:x[1]))
                 
+                if len(xs) ==0:
+                    await self.replica_manager.q.put("")
                 return JSONResponse(
                     content=jsonable_encoder( xs  )
                 )

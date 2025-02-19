@@ -2,7 +2,6 @@ import humanfriendly as HF
 import asyncio
 import os
 import time as T
-from option import Option,NONE, Some
 from mictlanxrouter.peer_manager import StoragePeerManager
 from mictlanx.logger.log import Log
 
@@ -22,9 +21,8 @@ log                       = Log(
 
 
 
-def run_async_healer(
+def run_async_storage_peer_manager(
         ph:StoragePeerManager,
-        # heartbeat:str="10s",
 ):
     async def __run_async_healer():
         # _heartbeat = HF.parse_timespan(heartbeat)

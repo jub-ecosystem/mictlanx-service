@@ -85,7 +85,7 @@
             "WORKERS": "4",
             "ELASTIC": "true",
             "NODE_IP_ADDR": "0.0.0.0",
-            "PEERS": ""
+            "PEERS": "mictlanx-peer-0:24000"
         },
         "memory": 4000000000,
         "cpu_count": 2,

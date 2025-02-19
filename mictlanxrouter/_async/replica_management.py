@@ -77,7 +77,7 @@ async def run_rm(
             "event":"REPLICA.MANAGEMENT.STARTED",
             "peers":len(peers),
         })
-        print("*"*100)
+        # print("*"*100)
     except Exception as e:
         log.error({
             "event":"RUN.RM.FAILED",
@@ -87,16 +87,10 @@ async def run_rm(
     
     while True:
         params                 = await rm.get_params()
-        # paginations = params.paginations
-        # for k,v in paginations.items():
-        #     if v.is_completed():
-        #         v.reset()
-        # await rm.update_params(paginations=paginations)
         elapsed = T.time() - last_time
         try:
             event               = rm.q.get_nowait()
-            # current_start_index =  params.batch_index*params.batch_size 
-            # current_end_index   = current_start_index + params.batch_size 
+            print("EVENT_RM")
             peers               = await rm.spm.get_available_peers()
             if len(peers)==0:
                 log.warning("No available storage peers.")
@@ -150,7 +144,8 @@ async def run_rm(
             
             for stat in stats:
                 ys = dict([ ("{}.{}.{}".format(stat.peer_id,b.bucket_id,b.key),0) for b in stat.balls])
-                await rm.extend_access_map(access_map=ys)
+                await rm.access_map_queue.put({"type":"EXTENDED_ACCESS_MAP", "params":{"access_map":ys}})
+                # await rm.extend_access_map(access_map=ys)
                 for b in stat.balls:
                     combined_key = "{}@{}".format(b.bucket_id, b.key)
                     if not combined_key in current_replicas_map:

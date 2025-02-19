@@ -6,7 +6,7 @@ import aiorwlock
 import humanfriendly as HF
 import mictlanx.v4.interfaces as InterfaceX
 from mictlanxrouter.peer_manager.healer import StoragePeerManager
-from typing import List,Dict,Tuple
+from typing import List,Dict,Tuple,Callable,Any,Awaitable
 import aiorwlock
 import asyncio
 import string
@@ -193,6 +193,53 @@ class ReplicaManager(object):
         )
         # peer_id.bucket_id.key -> # access
         self.access_replica_map:Dict[str,int]= {}
+        self.access_map_queue =  asyncio.Queue()
+        self.access_map_task = asyncio.create_task(self.access_map_worker())
+        self.EVENT_HANDLERS:Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {
+            "EXTENDED_ACCESS_MAP":self.extended_access_map_handler,
+            "ACCESSED":self.access_handler
+        }
+    async def access_handler(self,params:Dict[str,Any]): 
+        start_time       = T.time()
+        bucket_id        = params.get("bucket_id","")
+        key              = params.get("key","")
+        peer_id          = params.get("peer_id","")
+        ok = False
+        if not (bucket_id == "" or key =="" or peer_id ==""):
+            ok = True
+            await self.__access_increment_async(bucket_id=bucket_id,key=key, peer_id=peer_id)
+        self.__log.info({
+            "event":"ACCESSED",
+            "ok":ok,
+            "bucket_id":bucket_id,
+            "key":key,
+            "peer_id":peer_id,
+            "service_time":T.time() - start_time
+        })
+    async def extended_access_map_handler(self,params:Dict[str,Any]):
+        start_time = T.time()
+        access_map:Dict[str,int] = params.get("access_map",{})
+        if len(access_map.keys()) ==0:
+            return -1
+        await self.__extend_access_map_async(access_map=access_map )
+        self.__log.info({
+            "event":"EXTENDED_ACCESS_MAP",
+            "n_balls": len(access_map),
+            "service_time": T.time() - start_time
+        })
+
+    async def access_map_worker(self):
+        while True:
+            event = await self.access_map_queue.get()
+            # print("EVENT", event)
+            event_type = event.get("type")
+            event_params = event.get("params",{})
+            handler = self.EVENT_HANDLERS.get(event_type)
+            # print("HANDLER", handler)
+            if handler:
+                await handler(event_params)
+            # if event
+            await asyncio.sleep(1)
 
     # async def extend
     async def get_params(self,)->ReplicaManagerParams:
@@ -214,6 +261,18 @@ class ReplicaManager(object):
             for key in access_map.keys() | self.access_replica_map.keys():
                 value = access_map.get(key,0) + self.access_replica_map.get(key,0)
                 self.access_replica_map[key] = value
+    async def __extend_access_map_async(self, access_map:Dict[str,int]={}):
+        for key in access_map.keys() | self.access_replica_map.keys():
+            value = access_map.get(key,0) + self.access_replica_map.get(key,0)
+            self.access_replica_map[key] = value
+        print(self.access_replica_map)
+
+
+    async def __access_increment_async(self,bucket_id:str, key:str,peer_id:str)->None:
+        k       = "{}.{}.{}".format(peer_id,bucket_id,key)
+        x       = self.access_replica_map.setdefault(k,0)
+        self.access_replica_map[k] = x + 1
+
 
     async def access(self,bucket_id:str, key:str)->Option[InterfaceX.Peer]:
         min_access_replicas = await self.get_min_accessed_replica(bucket_id=bucket_id,key=key)
@@ -225,13 +284,15 @@ class ReplicaManager(object):
         })
         if min_access_replicas.is_none:
             return NONE
+        
         peer = min_access_replicas.unwrap()
-        async with self.get_lock.writer_lock:
-            peer_id = peer.peer_id
-            k = "{}.{}.{}".format(peer_id,bucket_id,key)
-            x = self.access_replica_map.setdefault(k,0)
-            self.access_replica_map[k] = x + 1
-            return min_access_replicas
+        await self.access_map_queue.put({"type":"ACCESSED", "params":{"bucket_id":bucket_id, "key":key, "peer_id": peer.peer_id}})
+        # async with self.get_lock.writer_lock:
+        #     peer_id = peer.peer_id
+        #     k = "{}.{}.{}".format(peer_id,bucket_id,key)
+        #     x = self.access_replica_map.setdefault(k,0)
+        #     self.access_replica_map[k] = x + 1
+        return min_access_replicas
     async def get_min_accessed_replica(self,bucket_id:str,key:str)->Option[InterfaceX.Peer]:
         replicas    = await self.get_current_replicas(bucket_id=bucket_id, key=key)
         min_replica = -1

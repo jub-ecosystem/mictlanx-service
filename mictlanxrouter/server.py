@@ -29,7 +29,7 @@ from mictlanx.v4.interfaces.responses import PutMetadataResponse
 from mictlanx.logger.log import Log
 from mictlanx.v4.summoner.summoner import  Summoner
 from mictlanx.utils.index import Utils
-from mictlanxrouter._async import run_async_healer,run_rm,run_data_replicator
+from mictlanxrouter._async import run_async_storage_peer_manager,run_rm,run_data_replicator
 from mictlanxrouter.tasksx import DefaultTaskManager
 from mictlanxrouter.opentelemetry import NoOpSpanExporter
 # ===========================================================
@@ -209,9 +209,11 @@ summoner        = Summoner(
     ip_addr     = MICTLANX_SUMMONER_IP_ADDR, 
     port        = MICTLANX_SUMMONER_PORT, 
     api_version = MICTLANX_SUMMONER_API_VERSION,
-    network= Some(IPv4Network(
-        MICTLANX_SUMMONER_SUBNET
-     ))
+    network= Some(
+        IPv4Network(
+            MICTLANX_SUMMONER_SUBNET
+        )
+     )
 )
 
 # ============= Storage Peer Manager ============================ 
@@ -243,6 +245,7 @@ storage_peer_manager = StoragePeerManager(
 # ============= Replica Manager ============================ 
 
 rm_q            = asyncio.Queue()
+
 replica_manager = ReplicaManager(
     tracer    = tracer,
     q         = rm_q,
@@ -302,23 +305,31 @@ log.debug({
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
-    t1 = asyncio.create_task(
-        run_async_healer(
+    storage_peer_manager_task = asyncio.create_task(
+        run_async_storage_peer_manager(
             ph=storage_peer_manager,
         )
     )
-    t0 = asyncio.create_task(run_rm(
+    rm_task = asyncio.create_task(run_rm(
         rm = replica_manager,
     ))
+    # 
     await storage_peer_manager.q.put(1)
     t2 = asyncio.create_task(run_data_replicator(
         data_replicator = data_replicator,
         heartbeat= MICTLANX_DATA_REPLICATOR_QUEUE_HEARTBEAT,
         max_idle_timeout= MICTLANX_DATA_REPLICATOR_MAX_IDLE_TIMEOUT
     ) )
+
+    handshake_daemon = asyncio.create_task(storage_peer_manager.handshake_worker())
+    
+    recover_daemon = asyncio.create_task(storage_peer_manager.recover_daemon())
+    
     yield
-    t0.cancel()
-    t1.cancel()
+    recover_daemon.cancel()
+    handshake_daemon.cancel()
+    rm_task.cancel()
+    storage_peer_manager_task.cancel()
     t2.cancel()
 
 app = FastAPI(
@@ -368,60 +379,6 @@ app.include_router(rm_controller.router)
 app.include_router(buckets_controller.router)
 app.include_router(cache_controller.router)
 
-# ======================= Replication ============================
-
-
-
-@app.post("/api/v4/u/buckets/{bucket_id}/{key}")
-async def update_metadata(
-    bucket_id:str,
-    key:str,
-    metadata:Metadata, 
-):
-    with tracer.start_as_current_span("update.metadata") as span:
-        span:Span      = span  
-        current_replicas = await replica_manager.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-        xs       =  await storage_peer_manager.from_peer_ids_to_peers(current_replicas)
-        success_replicas = len(xs)
-        for peer in xs:
-            result = peer.put_metadata(
-                bucket_id=bucket_id,
-                key=key,
-                ball_id= metadata.ball_id,
-                checksum=metadata.checksum,
-                content_type=metadata.content_type,
-                headers={"update":"1"},
-                is_disable=metadata.is_disabled,
-                producer_id=metadata.producer_id,
-                size=metadata.size,
-                tags=metadata.tags,
-            )
-            if result.is_err:
-                success_replicas-= 1
-
-        
-        if success_replicas == 0:
-            raise HTTPException(status_code=500,detail="")
-        return Response(content=None, status_code=204)
-
-
-            # print()
-
-
-        
-        # for peer in 
-
-
-
-# ======================= PUT ============================
-
-
-
-# > ======================= PUT ============================
-
-# ======================= GET ============================
-
-#> ======================= GET ============================
 @app.post("/api/v4/elastic")
 async def elastic(
     elastic_payload:PeerElasticPayload
@@ -464,130 +421,6 @@ async def elastic(
         content=jsonable_encoder(res.__dict__)
     )
 
-
-
-
-
-@app.post("/api/v4/buckets/{bucket_id}/metadata/{key}")
-async def put_metadatas(
-    bucket_id:str,
-    key:str,
-    metadata:Metadata, 
-):
-    start_time = T.time()
-    headers = {"Update":"1"}
-    combined_key = "{}@{}".format(bucket_id,key)
-    if (not bucket_id == metadata.bucket_id) or not(metadata.key == key):
-        raise HTTPException(
-            status_code=400,
-            detail="bucket_id o key are inconsistent with metadata"
-        )
-    # log.debug({
-    #     "event":"PUT.METADATA",
-    #     # "update":update,
-    #     "combined_key":combined_key
-    # })
-    try: 
-        # async with lock:
-            # curent_replicas:Set[str] = replicas_map.setdefault(combined_key,set([]))
-            # if len(curent_replicas)>=1 and not update =="1":
-                # detail = "{}/{} already exists.".format(metadata.bucket_id,metadata.key)
-                # raise HTTPException(status_code=500, detail=detail ,headers={} )
-
-        failed_ops = []
-        ps = await storage_peer_manager.get_available_peers()
-        for peer in os:
-            # print("UPDATE ", peer.peer_id)
-            result:Result[PutMetadataResponse,Exception] = peer.put_metadata(
-                bucket_id=metadata.bucket_id,
-                key=metadata.key,
-                ball_id=metadata.ball_id,
-                size= metadata.size,
-                checksum=metadata.checksum,
-                producer_id=metadata.producer_id,
-                content_type=metadata.content_type,
-                tags=metadata.tags,
-                is_disable=metadata.is_disabled,
-                headers=headers
-            )
-            if result.is_err:
-                failed_ops.append(peer)
-        # async with lock:
-        #     curent_replicas:Set[str] = replicas_map.setdefault(combined_key,set([]))
-        #     curent_replicas.add(peer.peer_id)
-        #     replicas_map[combined_key] = curent_replicas
-        # response = result.unwrap()
-
-        log.info({
-            "event":"UPDATE.METADATA",
-            "bucket_id":bucket_id,
-            "key":metadata.key,
-            "size":metadata.size,
-            "failed":len(failed_ops),
-            "service_time":T.time()- start_time
-        })
-        failed_len = len(failed_ops)
-        response = {
-            "bucket_id":bucket_id,
-            "key":metadata.key,
-            "size":metadata.size,
-            "failed_operations":failed_len,
-            "ok":failed_len == 0
-        }
-        return JSONResponse(content=jsonable_encoder(response))
-        # return JSONResponse(content=jsonable_encoder(response))
-    except R.exceptions.HTTPError as e:
-        detail = str(e.response.content.decode("utf-8") )
-        # e.response.reason
-        status_code = e.response.status_code
-        log.error({
-            "detail":detail,
-            "status_code":status_code,
-            "reason":e.response.reason,
-        })
-        raise HTTPException(status_code=status_code, detail=detail  )
-    except R.exceptions.ConnectionError as e:
-        detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-        log.error({
-            "detail":detail,
-            "status_code":500
-        })
-        raise HTTPException(status_code=500, detail=detail  )
-
-
-async def data_by_chunks(data:UploadFile,chunk_size:str="1MB"):
-    _chunk_size= HF.parse_size(chunk_size)
-    while True:
-        chunk = await data.read(_chunk_size)
-        if not chunk:
-            break
-        yield chunk
-
-@app.get("/api/v4/buckets/{bucket_id}/{key}/size")
-async def get_size_by_key(bucket_id:str,key:str):
-    global peer_healer_rwlock
-    try:
-        # async with peer_healer_rwlock.reader_lock:
-        #     peers = storage_peer_manager.peers
-        
-        peers = await replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
-        responses = []
-        for p in peers:
-            result = p.get_size(bucket_id=bucket_id,key=key, timeout = MICTLANX_TIMEOUT)
-            if result.is_ok:
-                response = result.unwrap()
-                responses.append(response)
-
-        return JSONResponse(content = jsonable_encoder(responses))
-    except Exception as e:
-        raise HTTPException(status_code = 500, detail="Uknown error: {}@{}".format(bucket_id,key))
-
-
-
-
-
-
-
 # Support endpoints
 @app.post("/mtx/u/rm")
 async def rm_update_params(req:Request):
@@ -616,9 +449,6 @@ async def spm_update_params(req:Request):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))   
-
-
-
 
 
 

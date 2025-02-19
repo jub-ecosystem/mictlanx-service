@@ -27,6 +27,7 @@ opentelemetry-exporter-zipkin = "^1.25.0"
 
 mictlanx = "^0.0.160"
 prometheus-fastapi-instrumentator = "^7.0.0"
+hypercorn = "^0.17.3"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
 more-itertools = "^10.2.0"

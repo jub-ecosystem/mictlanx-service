@@ -20,8 +20,6 @@ import requests  as R
 from mictlanx.utils import Utils as MictlanXUtils
 from nanoid import generate as nanoid
 from mictlanxrouter.caching import CacheX
-# from mictlanxrouter.dto.index import 
-# from mictlanxrouter.dto.index i
 
 
 class BucketsController():
@@ -31,7 +29,8 @@ class BucketsController():
                  replica_manager:ReplicaManager,
                  storage_peer_manager:StoragePeerManager,
                  tm: TaskManagerX,
-                 cache:CacheX
+                 cache:CacheX,
+                 max_timeout:str= "10s"
     ):
         self.log                  = log
         self.router               = APIRouter()
@@ -40,8 +39,29 @@ class BucketsController():
         self.storage_peer_manager = storage_peer_manager
         self.tm                   = tm
         self.cache                = cache
+        self.max_timeout = HF.parse_timespan(max_timeout)
         self.add_routes()
     def add_routes(self):
+
+        @self.router.get("/api/v4/buckets/{bucket_id}/{key}/size")
+        async def get_size_by_key(bucket_id:str,key:str):
+            # global peer_healer_rwlock
+            try:
+                # async with peer_healer_rwlock.reader_lock:
+                #     peers = storage_peer_manager.peers
+                
+                peers = await self.replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
+                responses = []
+                for p in peers:
+                    result = p.get_size(bucket_id=bucket_id,key=key, timeout = self.max_timeout)
+                    if result.is_ok:
+                        response = result.unwrap()
+                        responses.append(response)
+
+                return JSONResponse(content = jsonable_encoder(responses))
+            except Exception as e:
+                raise HTTPException(status_code = 500, detail="Uknown error: {}@{}".format(bucket_id,key))
+        
         @self.router.get("/api/v4/buckets/{bucket_id}/metadata")
         async def get_bucket_metadata(bucket_id):
             with self.tracer.start_as_current_span("get.bucket.metdata") as span:
@@ -132,7 +152,10 @@ class BucketsController():
 
                     access_start_time = T.time_ns()
                     maybe_peer = await self.replica_manager.access(bucket_id=bucket_id,key=key)
+
+
                     if maybe_peer.is_none:
+                        self.replica_manager.q.put_nowait("")
                         detail = "No available peers"
                         self.log.error({
                             "event":"GET.METADATA.FAILED",
@@ -194,6 +217,39 @@ class BucketsController():
                         "status_code":500
                     })
                     raise HTTPException(status_code=500, detail=detail  )
+   
+        @self.router.post("/api/v4/u/buckets/{bucket_id}/{key}")
+        async def update_metadata(
+            bucket_id:str,
+            key:str,
+            metadata:Metadata, 
+        ):
+            with self.tracer.start_as_current_span("update.metadata") as span:
+                span:Span      = span  
+                current_replicas = await self.replica_manager.get_current_replicas_ids(bucket_id=bucket_id,key=key)
+                xs       =  await self.storage_peer_manager.from_peer_ids_to_peers(current_replicas)
+                success_replicas = len(xs)
+                for peer in xs:
+                    result = peer.put_metadata(
+                        bucket_id=bucket_id,
+                        key=key,
+                        ball_id= metadata.ball_id,
+                        checksum=metadata.checksum,
+                        content_type=metadata.content_type,
+                        headers={"update":"1"},
+                        is_disable=metadata.is_disabled,
+                        producer_id=metadata.producer_id,
+                        size=metadata.size,
+                        tags=metadata.tags,
+                    )
+                    if result.is_err:
+                        success_replicas-= 1
+
+                
+                if success_replicas == 0:
+                    raise HTTPException(status_code=500,detail="")
+                return Response(content=None, status_code=204)
+    
         @self.router.post("/api/v4/buckets/{bucket_id}/metadata")
         async def put_metadata(
             bucket_id:str,
@@ -588,11 +644,11 @@ class BucketsController():
             for chunk in response.iter_content(chunk_size=_chunk_size):
                 yield chunk  
         
-        async def memoryview_stream(data: memoryview, chunk_size: int = 10):
-            """Async generator to stream memoryview in chunks."""
+        async def memoryview_stream(data: memoryview, chunk_size: int = 65536):
+            """Efficient async generator to stream memoryview in large chunks."""
             for i in range(0, len(data), chunk_size):
-                yield data[i:i + chunk_size].tobytes()  # Convert memoryview slice to bytes
-                await asyncio.sleep(0)  # Yield control for async streaming
+                chunk = bytes(data[i:i + chunk_size])
+                yield chunk  # ✅ Yield memoryview slices directly
 
         @self.router.get("/api/v4/buckets/{bucket_id}/{key}")
         async def get_data(
@@ -623,18 +679,19 @@ class BucketsController():
                         maybe_peer = await self.storage_peer_manager.get_peer_by_id(peer_id=peer_id)
                     else:
                         maybe_peer = await self.replica_manager.access(bucket_id=bucket_id,key=key)
-                        
+                    
+
                     if maybe_peer.is_none:
                         self.replica_manager.q.put_nowait("")
                         detail = "No available peer{}".format( "" if peer_id_param_is_empty else " {}".format(peer_id))
                         self.log.error({
-                            "event":"GET.DATA.FAILED",
+                            "event":"NO.PEER.AVAILABLE",
                             "bucket_id":bucket_id,
                             "key":key,
                             "peer_id":peer_id,
                             "detail":detail,
                         })
-                        raise HTTPException(status_code=404, detail=detail)
+                        raise HTTPException(status_code=404, detail="No found available replica peer or data, try again later.")
                     
                     peer = maybe_peer.unwrap()
                     span.add_event(name="get.peer", attributes={"peer_id":peer.peer_id}, timestamp=get_peer_start_time)
@@ -644,6 +701,8 @@ class BucketsController():
                     metadata_result         = peer.get_metadata(bucket_id=bucket_id, key=key, headers=headers)
                     if metadata_result.is_err:
                         detail = "Fail to fetch metadata from peer {}".format(peer.peer_id)
+                        self.replica_manager.remove_replicas(bucket_id=bucket_id,key=key)
+                        self.replica_manager.q.put_nowait("")
                         self.log.error({
                             "event":"GET.METADATA.FAILED",
                             "bucket_id":bucket_id,
@@ -670,15 +729,19 @@ class BucketsController():
                             "end_at":T.time_ns(),
                             "bucket_id":bucket_id,
                             "key":key,
-                            "size":metadata.metadata.size,
+                            "size":len(cached_data),
                             "peer_id":_peer_id,
                             "local_peer_id":_local_peer_id,
                             "hit":1,
                             # "eviction_policy":
                             "response_time":T.time() - start_time 
                         })
-                        response = StreamingResponse(memoryview_stream(data = cached_data, chunk_size=HF.parse_size(chunk_size)))
+                        chunk_size_bytes= HF.parse_size(chunk_size)
+                        print("CHUNKL_SIOZE_BYUTES", chunk_size_bytes)
+                        response = StreamingResponse(memoryview_stream(data = cached_data, chunk_size=chunk_size_bytes ), media_type=content_type)
+                        
                         _filename = metadata.metadata.tags.get("fullname", metadata.metadata.tags.get("filename", "{}_{}".format(bucket_id,key) ) ) if filename == "" else filename
+                        
                         if attachment:
                             response.headers["Content-Disposition"] = f"attachment; filename={_filename}" 
                         return response
@@ -692,7 +755,9 @@ class BucketsController():
                         put_result = self.cache.put(key=f"{bucket_id}@{key}", value=response.content)
                         print("CACHE_PUT_RESULT", put_result)
                         span.add_event("get.streaming", attributes={}, timestamp=get_streaming_start_time)
+                        
                         cg             = content_generator(response=response,chunk_size=chunk_size)
+
                         media_type     = response.headers.get('Content-Type',metadata.metadata.content_type) if content_type == "" else content_type
         # 
 
@@ -883,16 +948,17 @@ class BucketsController():
                 start_time= T.time()
 
                 gcr_timestamp = T.time_ns()
-                peers = await self.replica_manager.get_current_replicas(bucket_id=bucket_id,key=_ball_id)
-                if len(peers)==0:
-                    self.replica_manager.q.put_nowait("")
-                    detail = f"{bucket_id}@{_ball_id} not found"
-                    status_code = 404
-                    self.log.error({
-                        "detail":detail,
-                        "status_code":status_code,
-                    })
-                    raise HTTPException(status_code=status_code, detail=detail  )
+                peers = await self.storage_peer_manager.get_available_peers()
+                # peers = await self.replica_manager.get_current_replicas(bucket_id=bucket_id,key=_ball_id)
+                # if len(peers)==0:
+                #     self.replica_manager.q.put_nowait("")
+                #     detail = f"{bucket_id}@{_ball_id} not found"
+                #     status_code = 404
+                #     self.log.error({
+                #         "detail":detail,
+                #         "status_code":status_code,
+                #     })
+                #     raise HTTPException(status_code=status_code, detail=detail  )
                 span.add_event(name="get.replicas",attributes={},timestamp=gcr_timestamp)
                 headers = {}
                 combined_key = ""
@@ -927,7 +993,7 @@ class BucketsController():
                                     attributes = {"bucket_id":bucket_id, "key":metadata.key},
                                     timestamp  = timestamp
                                 )
-                                
+                                res           = await self.replica_manager.remove_replicas(bucket_id=bucket_id,key=metadata.key)
                                 self.log.debug({
                                     "event":"DELETE.BY.BALL_ID",
                                     "bucket_id":_bucket_id,
@@ -947,6 +1013,7 @@ class BucketsController():
                         })
                         res           = await self.replica_manager.remove_replicas(bucket_id=bucket_id,key=_ball_id)
                         return JSONResponse(content=jsonable_encoder(default_del_by_ball_id_response.model_dump()))
+                    
                     self.log.info({
                         "event":"DELETED.BY.BALL_ID",
                         "bucket_id":_bucket_id,
