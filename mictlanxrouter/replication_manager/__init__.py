@@ -10,7 +10,6 @@ from typing import List,Dict,Tuple,Callable,Any,Awaitable
 import aiorwlock
 import asyncio
 import string
-# from mictlanx.utils.index import Utils as MXUtils
 import json as J
 import os 
 from opentelemetry.trace import Span,StatusCode,Status
@@ -194,11 +193,31 @@ class ReplicaManager(object):
         # peer_id.bucket_id.key -> # access
         self.access_replica_map:Dict[str,int]= {}
         self.access_map_queue =  asyncio.Queue()
-        self.access_map_task = asyncio.create_task(self.access_map_worker())
         self.EVENT_HANDLERS:Dict[str, Callable[[Dict[str, Any]], Awaitable[None]]] = {
             "EXTENDED_ACCESS_MAP":self.extended_access_map_handler,
-            "ACCESSED":self.access_handler
+            "ACCESSED":self.access_handler,
+            "DELETED_ACCESS_MAP":self.deleted_access_map_handler
         }
+    async def deleted_access_map_handler(self,params:Dict[str,Any]):
+        start_time = T.time()
+        res = params.get("peers",[])
+        bucket_id = params.get("bucket_id","")
+        key = params.get("key","")
+        for p in res:
+            k = "{}.{}.{}".format(p,bucket_id,key)
+            if k in self.access_replica_map:
+                del self.access_replica_map[k]
+        self.__log.info({
+            "event":"DELETED.ACCESS.MAP",
+            "bucket_id":bucket_id,
+            "key":key,
+            "service_time":T.time() - start_time
+        })
+        return res
+
+    def run_acces_map_queue(self):
+        return asyncio.create_task(self.access_map_worker())
+        
     async def access_handler(self,params:Dict[str,Any]): 
         start_time       = T.time()
         bucket_id        = params.get("bucket_id","")
@@ -274,7 +293,7 @@ class ReplicaManager(object):
         self.access_replica_map[k] = x + 1
 
 
-    async def access(self,bucket_id:str, key:str)->Option[InterfaceX.Peer]:
+    async def access(self,bucket_id:str, key:str)->Option[InterfaceX.AsyncPeer]:
         min_access_replicas = await self.get_min_accessed_replica(bucket_id=bucket_id,key=key)
         self.__log.debug({
             "event":"ACCESS.INNER",
@@ -293,7 +312,7 @@ class ReplicaManager(object):
         #     x = self.access_replica_map.setdefault(k,0)
         #     self.access_replica_map[k] = x + 1
         return min_access_replicas
-    async def get_min_accessed_replica(self,bucket_id:str,key:str)->Option[InterfaceX.Peer]:
+    async def get_min_accessed_replica(self,bucket_id:str,key:str)->Option[InterfaceX.AsyncPeer]:
         replicas    = await self.get_current_replicas(bucket_id=bucket_id, key=key)
         min_replica = -1
         min_val = -0
@@ -330,7 +349,7 @@ class ReplicaManager(object):
                 span.add_event(name="rm.filtered.available_replicas", attributes={"available_replicas":result_list })
                 return result_list
             # return list(_all_peers_ids.difference(current_replicas))
-    async def get_available_peers(self,bucket_id:str,key:str)->List[InterfaceX.Peer]:
+    async def get_available_peers(self,bucket_id:str,key:str)->List[InterfaceX.AsyncPeer]:
         try:
             xs = await self.get_available_peers_ids(bucket_id=bucket_id,key=key)
             return await self.spm.from_peer_ids_to_peers(peer_ids=xs)
@@ -352,16 +371,34 @@ class ReplicaManager(object):
                 res = self.replica_map.pop(combined_key)
             else:
                 res = []
+        await self.access_map_queue.put({"type":"DELETED_ACCESS_MAP", "params":{"peers":res,"bucket_id":bucket_id,"key":key}})
+        return res
+    
+    async def remove_replicas_by_ids(self,bucket_id:str,key:str, replica_ids:List[str]=[])->List[str]:
+        combined_key = "{}@{}".format(bucket_id,key)
+        async with self.lock.writer_lock:
+            if combined_key in self.replica_map:
+                res = set(self.replica_map.pop(combined_key))
+                _s = set(replica_ids)
+                diff_replicas = list(res.difference(_s))
+                if len(diff_replicas) ==0:
+                    self.replica_map.pop(combined_key)
+                else:
+                    self.replica_map[combined_key] = diff_replicas
+            else:
+                res = []
+        await self.access_map_queue.put({"type":"DELETED_ACCESS_MAP", "params":{"peers":replica_ids,"bucket_id":bucket_id,"key":key}})
+        return replica_ids
         
-        async with self.get_lock.writer_lock:
-            for p in res:
-                k = "{}.{}.{}".format(p,bucket_id,key)
-                if k in self.access_replica_map:
-                    del self.access_replica_map[k]
-            return res
+        # async with self.get_lock.writer_lock:
+        #     for p in res:
+        #         k = "{}.{}.{}".format(p,bucket_id,key)
+        #         if k in self.access_replica_map:
+        #             del self.access_replica_map[k]
+        #     return res
             # return []
 
-    async def get_current_replicas(self,bucket_id:str, key:str)->List[InterfaceX.Peer]:
+    async def get_current_replicas(self,bucket_id:str, key:str)->List[InterfaceX.AsyncPeer]:
         combined_key    = "{}@{}".format(bucket_id,key)
         # available_peers = await self.spm.get_available_peers()
         async with self.lock.reader_lock:

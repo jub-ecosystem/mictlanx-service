@@ -1,5 +1,5 @@
 from mictlanxrouter.replication_manager import ReplicaManager
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,HTTPException,Request
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from mictlanx.logger.log import Log
@@ -65,3 +65,18 @@ class ReplicaManagerController():
                 )
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
+        @self.router.post("/mtx/u/rm")
+        async def rm_update_params(req:Request):
+            try:
+                json_body = await req.json()
+                await self.replica_manager.update_params(**json_body)
+                params = await self.replica_manager.get_params()
+                return JSONResponse(
+                    content= jsonable_encoder(
+                        params
+                    )
+                )
+                
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))   
+

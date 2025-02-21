@@ -7,44 +7,38 @@ import aiorwlock
 import signal
 from asyncio.queues import Queue
 import asyncio
-from fastapi import FastAPI,Response,HTTPException,UploadFile,Request
+from fastapi import FastAPI
 #
 from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
-from option import Result,Some,Ok,Err
+from option import Some
 from fastapi.middleware.gzip import GZipMiddleware
 from ipaddress import IPv4Network
 # 
 import mictlanxrouter.caching as ChX
 import mictlanxrouter.controllers as Cx
 from mictlanxrouter.replication_manager import ReplicaManager,ReplicaManagerParams,DataReplicator
-from mictlanxrouter.dto.metadata import Metadata
 from mictlanxrouter.peer_manager.healer import StoragePeerManager,StoragePeerManagerParams
-from mictlanxrouter.dto.index import PeerElasticPayload
 # 
-from mictlanx.v4.interfaces.responses import PutMetadataResponse
+from mictlanxrouter.garbage_collector import GarbageCollectorX
 from mictlanx.logger.log import Log
 from mictlanx.v4.summoner.summoner import  Summoner
 from mictlanx.utils.index import Utils
+from mictlanx.interfaces import AsyncPeer
 from mictlanxrouter._async import run_async_storage_peer_manager,run_rm,run_data_replicator
 from mictlanxrouter.tasksx import DefaultTaskManager
 from mictlanxrouter.opentelemetry import NoOpSpanExporter
+
 # ===========================================================
 # Opentelemetry
 # ===========================================================
-# from opentelemetry.instrumentation.requests import RequestsInstrumentor
 # Prometheus
 from prometheus_client import Counter
 from prometheus_fastapi_instrumentator import Instrumentator
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry import trace
-from opentelemetry.trace import Span,Status,StatusCode
 
-ACCESS_COUNTER = Counter('data_access', 'Total number of access', ['bucket_id', 'key'])
-METADATA_ACCESS_COUNTER = Counter('metadata_access', 'Total number of metadata access', ['bucket_id', 'key'])
 
 # from opentelemetry.span
 from opentelemetry.sdk.trace import TracerProvider
@@ -76,7 +70,6 @@ if MICTLANX_CACHE:
     )
 else:
     cache = ChX.NoCache()
-    # if MICTLANX_CACHE_EVICTION_POLICY =="LRU"
 
 resource = Resource(
     attributes={
@@ -112,11 +105,6 @@ else:
 if MICTLANX_DEBUG:
     processor = BatchSpanProcessor(ConsoleSpanExporter())
     trace_provider.add_span_processor(processor)
-
-
-# ===========================================================
-# END OPEN 
-# ===========================================================
 
 
 LOG_PATH                    = os.environ.get("LOG_PATH","/log")
@@ -171,6 +159,7 @@ MICTLANX_DATA_REPLICATOR_MAX_IDLE_TIMEOUT = os.environ.get("MICTLANX_DATA_REPLIC
 MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:24000 mictlanx-peer-1:localhost:24001")
 MICTLANX_PROTOCOL    = os.environ.get("MICTLANX_PROCOTOL","http")
 MICTLANX_PEERS       = [] if MICTLANX_PEERS_STR == "" else list(Utils.peers_from_str_v2(peers_str=MICTLANX_PEERS_STR,separator=" ", protocol=MICTLANX_PROTOCOL,) )
+MICTLANX_PEERS = list(map(lambda x:AsyncPeer(peer_id=x.peer_id, ip_addr=x.ip_addr, port=x.port, protocol=x.protocol) , MICTLANX_PEERS))
 MICTLANX_API_VERSION = os.environ.get("MICTLANX_API_VERSION","4")
 MICTLANX_TIMEOUT     = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
 # Summoner
@@ -183,12 +172,11 @@ MICTLANX_SUMMONER_SUBNET      = os.environ.get("MICTLANX_SUMMONER_SUBNET","10.0.
 def signal_handler(sig, frame):
     global log
     log.warning('Shutting down gracefully...')
-    # for task in asyncio.all_tasks(loop):
-        # task.cancel()
-    # loop.stop()
     sys.exit(0)
 
+
 signal.signal(signal.SIGINT, signal_handler)
+
 # ===========================================================
 
 log                         = Log(
@@ -240,12 +228,12 @@ storage_peer_manager = StoragePeerManager(
         peer_elastic                    = MICTLANX_SPM_PEERS_ELASTIC,
         peer_docker_image               = MICTLANX_SPM_PEERS_DOCKER_IMAGE,
         max_timeout_peers_handshake     = MICTLANX_SPM_MAX_TIMEOUT_PEERS_HANDSHAKE,
+        recover_tick_timeout= os.environ.get("MICTLANX_RECOVER_TICK_TIMEOUT","1m")
     ))
 )
 # ============= Replica Manager ============================ 
 
 rm_q            = asyncio.Queue()
-
 replica_manager = ReplicaManager(
     tracer    = tracer,
     q         = rm_q,
@@ -271,7 +259,7 @@ data_replicator_q = asyncio.Queue()
 data_replicator = DataReplicator(tracer=tracer,queue= data_replicator_q, rm = replica_manager)
 
 
-
+gc = GarbageCollectorX(rm = replica_manager,storage_peer_manager=storage_peer_manager,timeout= os.environ.get("MICTLANX_GC_TIMEOUT","5m"))
 
  
 log.debug({
@@ -303,8 +291,30 @@ log.debug({
 
 # ______________________________
 
+
+import fcntl
+def try_acquire_lock(lock_file: str):
+    """Try to acquire an exclusive non-blocking file lock.
+       Returns the file descriptor if successful, otherwise None."""
+    fd = os.open(lock_file, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except BlockingIOError:
+        os.close(fd)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app:FastAPI):
+    
+    # lock_fd = try_acquire_lock(lock_file="/mictlanx/local/x.lock")
+    # print("LOCK", lock_fd)
+    # if lock_fd:
+
+    access_map_worker_task = replica_manager.run_acces_map_queue()
+    spm_main_worker_task   =  storage_peer_manager.run_main_queue()
+    gc_task                = asyncio.create_task(gc.run())
     storage_peer_manager_task = asyncio.create_task(
         run_async_storage_peer_manager(
             ph=storage_peer_manager,
@@ -313,7 +323,6 @@ async def lifespan(app:FastAPI):
     rm_task = asyncio.create_task(run_rm(
         rm = replica_manager,
     ))
-    # 
     await storage_peer_manager.q.put(1)
     t2 = asyncio.create_task(run_data_replicator(
         data_replicator = data_replicator,
@@ -326,11 +335,23 @@ async def lifespan(app:FastAPI):
     recover_daemon = asyncio.create_task(storage_peer_manager.recover_daemon())
     
     yield
+    access_map_worker_task.cancel()
+    spm_main_worker_task.cancel()
+    gc_task.cancel()
     recover_daemon.cancel()
     handshake_daemon.cancel()
     rm_task.cancel()
     storage_peer_manager_task.cancel()
     t2.cancel()
+    # else:
+        # yield
+
+peers_controller           = Cx.PeersController(log = log, storage_peer_manager=storage_peer_manager,tracer=tracer, network_id=MICTLANX_ROUTER_NETWORK_ID, max_peers_rf=MICTLANX_ROUTER_MAX_PEERS_RF)
+data_replicator_controller = Cx.DataReplicatorController(log =log, data_replicator=data_replicator)
+tasks_controller           = Cx.TasksController(log = log, tm =tm)
+rm_controller              = Cx.ReplicaManagerController(log = log, replica_manager=replica_manager)
+buckets_controller         = Cx.BucketsController(log = log, tracer= tracer, replica_manager=replica_manager, storage_peer_manager=storage_peer_manager, tm = tm, cache = cache)
+cache_controller = Cx.CacheControllers(log = log, cache =cache)
 
 app = FastAPI(
     root_path=os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"),
@@ -366,12 +387,6 @@ def generate_openapi():
     return app.openapi_schema
 
 app.openapi = generate_openapi
-peers_controller           = Cx.PeersController(log = log, storage_peer_manager=storage_peer_manager,tracer=tracer)
-data_replicator_controller = Cx.DataReplicatorController(log =log, data_replicator=data_replicator)
-tasks_controller           = Cx.TasksController(log = log, tm =tm)
-rm_controller              = Cx.ReplicaManagerController(log = log, replica_manager=replica_manager)
-buckets_controller         = Cx.BucketsController(log = log, tracer= tracer, replica_manager=replica_manager, storage_peer_manager=storage_peer_manager, tm = tm, cache = cache)
-cache_controller = Cx.CacheControllers(log = log, cache =cache)
 app.include_router(peers_controller.router)
 app.include_router(data_replicator_controller.router)
 app.include_router(tasks_controller.router)
@@ -379,77 +394,12 @@ app.include_router(rm_controller.router)
 app.include_router(buckets_controller.router)
 app.include_router(cache_controller.router)
 
-@app.post("/api/v4/elastic")
-async def elastic(
-    elastic_payload:PeerElasticPayload
-):
-    start_time      = T.time()
-    current_n_peers = await storage_peer_manager.get_n_available_peers()
-    _rf = 0 if current_n_peers >= elastic_payload.rf else elastic_payload.rf - current_n_peers
-    if elastic_payload.strategy == "ACTIVE":
-        res = await storage_peer_manager.active_deploy_peers(
-            disk=elastic_payload.disk,
-            cpu=elastic_payload.cpu,
-            memory=elastic_payload.memory,
-            network_id= MICTLANX_ROUTER_NETWORK_ID,
-            rf  = _rf, 
-            # elastic_payload.rf if elastic_payload.rf <= MICTLANX_ROUTER_MAX_PEERS_RF else MICTLANX_ROUTER_MAX_PEERS_RF,
-            workers=elastic_payload.workers,
-            elastic=elastic_payload.elastic,
-        )
-    elif elastic_payload.strategy == "PASSIVE":
-        pass
-    else:
-        res = await storage_peer_manager.active_deploy_peers(
-            disk=elastic_payload.disk,
-            cpu=elastic_payload.cpu,
-            memory=elastic_payload.memory,
-            network_id= MICTLANX_ROUTER_NETWORK_ID,
-            rf= elastic_payload.rf if elastic_payload.rf <= MICTLANX_ROUTER_MAX_PEERS_RF else MICTLANX_ROUTER_MAX_PEERS_RF,
-            workers=elastic_payload.workers,
-            elastic=elastic_payload.elastic,
-        )
-        
-    response_time = T.time() - start_time
-    log.info({
-        "event":"PEER.REPLICATION",
-        **elastic_payload.__dict__,
-        "rf":_rf,
-        "response_time":response_time
-    })
-    return JSONResponse(
-        content=jsonable_encoder(res.__dict__)
-    )
+
+
+
+
 
 # Support endpoints
-@app.post("/mtx/u/rm")
-async def rm_update_params(req:Request):
-    try:
-        json_body = await req.json()
-        await replica_manager.update_params(**json_body)
-        params = await replica_manager.get_params()
-        return JSONResponse(
-            content= jsonable_encoder(
-                params
-            )
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))   
-@app.post("/mtx/u/spm")
-async def spm_update_params(req:Request):
-    try:
-        json_body = await req.json()
-        await storage_peer_manager.update_params(**json_body)
-        params = await storage_peer_manager.get_params()
-        return JSONResponse(
-            content=jsonable_encoder(
-                params
-            )
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))   
-
 
 
 

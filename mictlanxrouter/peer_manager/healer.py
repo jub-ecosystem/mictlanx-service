@@ -1,15 +1,11 @@
-import os
 import asyncio
 from mictlanx.logger.log import Log
 
 import json as J
 from mictlanxrouter.helpers.utils import Utils as RouterUtils
 from mictlanx.utils.index import Utils as MictlanXUtils
-from mictlanx.v4.interfaces.index import Peer,PeerStats
-from mictlanx.v4.interfaces.responses import PeerStatsResponse,GetUFSResponse
 import humanfriendly as HF
 from queue import Queue
-# from threading import Thread
 from typing import List,Dict,Literal,Tuple,Any
 from option import Result,Ok,Err
 import requests as R
@@ -17,8 +13,9 @@ import time as T
 from option import NONE,Some,Option
 import aiorwlock
 from mictlanx.v4.summoner.summoner import Summoner
-from mictlanx.interfaces.payloads import SummonContainerPayload,ExposedPort,MountX
-from mictlanx.interfaces.responses import SummonContainerResponse
+from mictlanx.interfaces import SummonContainerPayload,ExposedPort,MountX,SummonContainerResponse,PeerStats,PeerStatsResponse,GetUFSResponse
+from mictlanx.v4.interfaces.index import AsyncPeer as Peer
+
 from dataclasses import dataclass
 from opentelemetry.trace import Span,Status,StatusCode
 from opentelemetry.sdk.trace import Tracer
@@ -52,7 +49,8 @@ class StoragePeerManagerParams(object):
         peer_max_interval_time:int = 20,
         
         max_timeout_peers_handshake:str ="30s",
-        tick_peers_handshake:str = "5s"
+        tick_peers_handshake:str = "5s",
+        recover_tick_timeout:str ="1m"
     ):
         self.tick_peers_handshake = tick_peers_handshake
         self.max_timeout_peers_handshake = max_timeout_peers_handshake
@@ -75,6 +73,7 @@ class StoragePeerManagerParams(object):
         self.peers_config_path = peers_config_path
         self.max_timeout_to_save_peer_config = max_timeout_to_save_peer_config
         self.__last_update_at       = T.time()
+        self.recover_tick_timeout = recover_tick_timeout
 
     def check(self, spmp: 'StoragePeerManagerParams') -> Option['StoragePeerManagerParams']:
         if (self.max_idle_time != spmp.max_idle_time or
@@ -98,6 +97,9 @@ class StoragePeerManagerParams(object):
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+
+
+
 class StoragePeerManager:
     def __init__(self,
         tracer:Tracer,
@@ -168,8 +170,9 @@ class StoragePeerManager:
         }
         # self.total_gets_counter = 0
         # self.total_puts_counter = 0
-        self.main_q_task = asyncio.create_task(self.main_queue_worker())
-    
+    def run_main_queue(self):
+        return asyncio.create_task(self.main_queue_worker())
+
     async def main_queue_worker(self):
         while self.is_running:
             event = await self.main_queue.get()
@@ -450,7 +453,7 @@ class StoragePeerManager:
                 # })
                 return peers_ids
  
-    async def get_available_peers(self):
+    async def get_available_peers(self)->List[Peer]:
         async with self.lock.reader_lock:
             return self.available_peers
     
@@ -482,15 +485,15 @@ class StoragePeerManager:
         async with self.lock.reader_lock:
             return list(set(list(map(lambda x:x.peer_id, self.available_peers))))
     
-    async def get_len_available_peers(self):
+    async def get_len_available_peers(self)->int:
         async with self.lock.reader_lock:
             return len(self.available_peers)
 
-    async def get_len_unavailable_peers(self):
+    async def get_len_unavailable_peers(self)->int:
         async with self.lock.reader_lock:
             return len(self.unavailable_peers)
 
-    async def get_unavailable_peers_ids(self):
+    async def get_unavailable_peers_ids(self)->List[str]:
         async with self.lock.reader_lock:
             return list(set(list(map(lambda x:x.peer_id, self.unavailable_peers))))
         
@@ -574,7 +577,7 @@ class StoragePeerManager:
         """Traverse the peers and get the stats /api/v4/peers/stats"""
         # with self.tracer.start_as_current_span("stats")
         available_peers = await self.get_available_peers()
-        xs=  [p.get_stats().unwrap_or(PeerStatsResponse.empty()) for p in available_peers ]
+        xs=  [(await p.get_stats()).unwrap_or(PeerStatsResponse.empty()) for p in available_peers ]
         xs_dict = dict([(p.peer_id, p) for p in xs])
         async with self.lock.writer_lock:
             self.__peers_stats_responses = xs_dict
@@ -594,7 +597,7 @@ class StoragePeerManager:
                     "service_time":T.time()-current_time
                 })
                 self.last_recover_tick = T.time()
-            await asyncio.sleep(self.params.queue_tick_timeout_in_seconds)
+            await asyncio.sleep(self.params.recover_tick_timeout)
 
     async def recover(self,params:StoragePeerManagerParams):
         with self.tracer.start_as_current_span("spm.recover") as span:
@@ -630,9 +633,9 @@ class StoragePeerManager:
                                     "max_timeout":self.max_recover_time_until_restart,
                                     "ok":res.is_ok
                                 })
-                            async with self.lock.writer_lock:
-                                recovered_peers.append(unavailable_peer)
-                                self.peers.append(unavailable_peer)
+                                async with self.lock.writer_lock:
+                                    recovered_peers.append(unavailable_peer)
+                                    self.peers.append(unavailable_peer)
                                 
                         elif elapsed >= self.max_recover_time_until_restart and not params.peer_elastic:
                             span.add_event(name="spm.elasticity.disabled",attributes={
@@ -678,7 +681,7 @@ class StoragePeerManager:
                     if stats is None:
                         continue
 
-                    result = p.add_peer(
+                    result = await p.add_peer(
                         id   = p2.peer_id,
                         disk =stats.total_disk,
                         used_disk=0,
@@ -814,7 +817,7 @@ class StoragePeerManager:
         backoff:float =1,
         logger:Any = None
     )->Tuple[Peer, Result[GetUFSResponse,Exception]]:
-        return (peer,peer.get_ufs_with_retry(
+        return (peer,await peer.get_ufs_with_retry(
             headers=headers,
             delay=delay,
             max_delay=max_delay,

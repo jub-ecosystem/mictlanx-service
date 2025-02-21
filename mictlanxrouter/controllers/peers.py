@@ -1,5 +1,5 @@
 from fastapi.routing import APIRouter
-from fastapi import HTTPException,Response,FastAPI
+from fastapi import HTTPException,Response,Request
 from mictlanxrouter.dto.index import PeerPayload
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -11,23 +11,31 @@ from typing import List
 import time as T
 from mictlanx.logger.log import Log
 from opentelemetry.trace import Tracer
+from mictlanxrouter.dto.index import PeerElasticPayload
+from mictlanx.v4.interfaces.index import AsyncPeer
 
 class PeersController():
     def __init__(self, 
             log:Log,
             storage_peer_manager:StoragePeerManager,
-            tracer:Tracer
+            tracer:Tracer,
+            network_id:str ="mictlanx",
+            max_peers_rf:int = 5
         ):
         self.log = log
         self.storage_peer_manager = storage_peer_manager
         self.router = APIRouter(prefix="/api/v4")
         self.tracer = tracer
+        self.network_id = network_id
+        self.max_peers_rf = max_peers_rf
         self.add_routes()
 
     async def fx(self,peer_payload:PeerPayload)->Result[str,Exception]:
         # async with peer_healer_rwlock.writer_lock:
         try:
-            status = await self.storage_peer_manager.add_peer(peer_payload.to_v4peer())
+            _p  = peer_payload.to_v4peer()
+            peer = AsyncPeer(peer_id=_p.peer_id, ip_addr=_p.ip_addr,port=_p.port,protocol=_p.protocol)
+            status = await self.storage_peer_manager.add_peer(peer)
             self.log.debug({
                 "event":"PEER.ADDED",
                 "peer_id":peer_payload.peer_id,
@@ -267,8 +275,7 @@ class PeersController():
                     failed = 0 
                     for peer in peers:
                         try:
-                            result = peer.get_stats(timeout=10, start=start, end=end)
-                            
+                            result = await peer.get_stats(timeout=10, start=start, end=end)
                             if result.is_ok:
                                 stats_response = result.unwrap()
                                 responses.append(stats_response.__dict__)
@@ -318,3 +325,59 @@ class PeersController():
                     "status_code":500
                 })
                 raise HTTPException(status_code=500, detail=detail  )
+
+        @self.router.post("/mtx/u/spm")
+        async def spm_update_params(req:Request):
+            try:
+                json_body = await req.json()
+                await self.storage_peer_manager.update_params(**json_body)
+                params = await self.storage_peer_manager.get_params()
+                return JSONResponse(
+                    content=jsonable_encoder(
+                        params
+                    )
+                )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))   
+
+        @self.router.post("/api/v4/elastic")
+        async def elastic(
+            elastic_payload:PeerElasticPayload
+        ):
+            start_time      = T.time()
+            current_n_peers = await self.storage_peer_manager.get_n_available_peers()
+            _rf = 0 if current_n_peers >= elastic_payload.rf else elastic_payload.rf - current_n_peers
+            if elastic_payload.strategy == "ACTIVE":
+                res = await self.storage_peer_manager.active_deploy_peers(
+                    disk=elastic_payload.disk,
+                    cpu=elastic_payload.cpu,
+                    memory=elastic_payload.memory,
+                    network_id= self.network_id,
+                    rf  = _rf, 
+                    # elastic_payload.rf if elastic_payload.rf <= MICTLANX_ROUTER_MAX_PEERS_RF else MICTLANX_ROUTER_MAX_PEERS_RF,
+                    workers=elastic_payload.workers,
+                    elastic=elastic_payload.elastic,
+                )
+            elif elastic_payload.strategy == "PASSIVE":
+                pass
+            else:
+                res = await self.storage_peer_manager.active_deploy_peers(
+                    disk=elastic_payload.disk,
+                    cpu=elastic_payload.cpu,
+                    memory=elastic_payload.memory,
+                    network_id= self.network_id,
+                    rf= elastic_payload.rf if elastic_payload.rf <=  self.max_peers_rf else self.max_peers_rf,
+                    workers=elastic_payload.workers,
+                    elastic=elastic_payload.elastic,
+                )
+                
+            response_time = T.time() - start_time
+            self.log.info({
+                "event":"PEER.REPLICATION",
+                **elastic_payload.__dict__,
+                "rf":_rf,
+                "response_time":response_time
+            })
+            return JSONResponse(
+                content=jsonable_encoder(res.__dict__)
+    )

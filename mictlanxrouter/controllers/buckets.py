@@ -9,6 +9,7 @@ from typing import Annotated,Union,List,Dict,Tuple,Iterator
 from mictlanxrouter.dto.metadata import Metadata
 from mictlanxrouter.replication_manager import ReplicaManager
 from mictlanxrouter.peer_manager import StoragePeerManager
+import httpx
 from mictlanxrouter.dto import TaskX,Operations,DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.tasksx import TaskManagerX
 from option import Result,Ok,Err
@@ -45,15 +46,11 @@ class BucketsController():
 
         @self.router.get("/api/v4/buckets/{bucket_id}/{key}/size")
         async def get_size_by_key(bucket_id:str,key:str):
-            # global peer_healer_rwlock
             try:
-                # async with peer_healer_rwlock.reader_lock:
-                #     peers = storage_peer_manager.peers
-                
                 peers = await self.replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
                 responses = []
                 for p in peers:
-                    result = p.get_size(bucket_id=bucket_id,key=key, timeout = self.max_timeout)
+                    result = await p.get_size(bucket_id=bucket_id,key=key, timeout = self.max_timeout)
                     if result.is_ok:
                         response = result.unwrap()
                         responses.append(response)
@@ -86,7 +83,7 @@ class BucketsController():
 
                     for peer in peers:
                         timestamp = T.time_ns()
-                        result = peer.get_bucket_metadata(bucket_id=bucket_id,headers={})
+                        result = await peer.get_bucket_metadata(bucket_id=bucket_id,headers={})
                         if result.is_err:
                             continue
                         metadata = result.unwrap()
@@ -166,7 +163,7 @@ class BucketsController():
                         raise HTTPException(status_code=404, detail=detail)
                     peer = maybe_peer.unwrap()
                     span.add_event(name= "get.peer",attributes={},timestamp=access_start_time)
-                    metadata_result = peer.get_metadata(bucket_id=bucket_id, key=key, headers={})
+                    metadata_result = await peer.get_metadata(bucket_id=bucket_id, key=key, headers={})
                     if metadata_result.is_err:
                         detail = "No metadata found for {}@{}".format(bucket_id,key)
                         self.log.error({
@@ -230,7 +227,7 @@ class BucketsController():
                 xs       =  await self.storage_peer_manager.from_peer_ids_to_peers(current_replicas)
                 success_replicas = len(xs)
                 for peer in xs:
-                    result = peer.put_metadata(
+                    result = await peer.put_metadata(
                         bucket_id=bucket_id,
                         key=key,
                         ball_id= metadata.ball_id,
@@ -260,11 +257,11 @@ class BucketsController():
                 span:Span      = span  
                 arrival_time   = T.time()
                 start_at       = T.time_ns()
-
                 available_peers = await self.storage_peer_manager.get_available_peers()
-                key       = MictlanXUtils.sanitize_str(x = metadata.key)
-                bucket_id = MictlanXUtils.sanitize_str(x = bucket_id)
-                group_id = nanoid()
+                key             = MictlanXUtils.sanitize_str(x = metadata.key)
+                bucket_id       = MictlanXUtils.sanitize_str(x = bucket_id)
+                group_id        = nanoid()
+
                 if len(available_peers) ==0:
                     detail= "Put metadata failed, no available peers."
                     self.log.error({
@@ -291,7 +288,7 @@ class BucketsController():
                 # ======================= GET.CURRENT.REPLICAS ============================
                
                 current_replicas = await self.replica_manager.get_current_replicas_ids(bucket_id=bucket_id,key=key)
-            
+                
                 if len(current_replicas) > 0:
                     detail = "{}/{} already exists.".format(metadata.bucket_id,metadata.key)
                     self.log.error({
@@ -329,7 +326,11 @@ class BucketsController():
 
                 # combined_key = "{}@{}".format(bucket_id,key)
 
-                self.log.debug("PUT.METADATA {} {}".format(bucket_id,key))
+                self.log.debug({
+                    "event":"PUT.METADATA",
+                    "bucket_id":bucket_id,
+                    "key":key
+                })
 
                 try: 
                     replicas               = create_replica_result.success_replicas
@@ -338,7 +339,7 @@ class BucketsController():
                     tasks_ids              = []
                     for peer in selected_replica_peers:
                         inner_start_time = T.time()
-                        put_metadata_result:Result[PeerPutMetadataResponse,Exception] = peer.put_metadata(
+                        put_metadata_result:Result[PeerPutMetadataResponse,Exception] = await peer.put_metadata(
                             bucket_id=metadata.bucket_id,
                             key=metadata.key,
                             ball_id=metadata.ball_id,
@@ -370,8 +371,7 @@ class BucketsController():
                         if add_task_result.is_err:
                             raise add_task_result.unwrap_err()
                         tasks_ids.append(task.task_id)
-                        self.log.info(
-                            Utils.dict_to_string({
+                        self.log.info({
                             "event":"PUT.METADATA",
                             "bucket_id":bucket_id,
                             "key":metadata.key,
@@ -381,7 +381,7 @@ class BucketsController():
                             "content_type":task.content_type,
                             "replica_factor":metadata.replication_factor,
                             "response_time":T.time()- inner_start_time
-                        }))
+                        })
 
                     put_metadata_response = PutMetadataResponse(
                         bucket_id=bucket_id,
@@ -463,7 +463,7 @@ class BucketsController():
                     span.add_event(name="read.data",attributes={"size":size},timestamp=get_task_timestamp)
                     # =========================PUT.DATA=======================================
                     get_task_timestamp = T.time_ns()
-                    result = peer.put_data(task_id=task_id,key=task.key,value=value,content_type=task.content_type)
+                    result = await peer.put_data(task_id=task_id,key=task.key,value=value,content_type=task.content_type)
                     if result.is_err:
                         raise result.unwrap_err()
                     span.add_event(name="peer.put.data",attributes={},timestamp=get_task_timestamp)
@@ -540,7 +540,7 @@ class BucketsController():
                         gt_start_time = T.time_ns()
                         headers       = {}
                         chunks        = request.stream()
-                        result        = await peer.put_chuncked_async(task_id=task_id, chunks = chunks,headers=headers)
+                        result        = await peer.put_chunked(task_id=task_id, chunks = chunks,headers=headers)
                         if result.is_err:
                             raise result.unwrap_err()
 
@@ -611,7 +611,7 @@ class BucketsController():
                 peers = await self.replica_manager.get_current_replicas(bucket_id=bucket_id,key=key)
                 
                 for peer in peers:
-                    res = peer.disable(bucket_id=bucket_id,key=key,headers=headers)
+                    res = await peer.disable(bucket_id=bucket_id,key=key,headers=headers)
                 self.log.info({
                     "event":"DISABLE.COMPLETED",
                     "bucket_id":bucket_id,
@@ -639,9 +639,9 @@ class BucketsController():
                 raise HTTPException(status_code=500, detail=detail  )
                 
 
-        async def content_generator(response:R.Response,chunk_size:str="5mb"):
+        async def content_generator(response:httpx.Response,chunk_size:str="5mb"):
             _chunk_size = HF.parse_size(chunk_size)
-            for chunk in response.iter_content(chunk_size=_chunk_size):
+            async for chunk in response.aiter_bytes(chunk_size=_chunk_size):
                 yield chunk  
         
         async def memoryview_stream(data: memoryview, chunk_size: int = 65536):
@@ -698,7 +698,7 @@ class BucketsController():
                     headers = {}
                     # > ======================= GET.METADATA ============================
                     get_metadata_start_time = T.time_ns()
-                    metadata_result         = peer.get_metadata(bucket_id=bucket_id, key=key, headers=headers)
+                    metadata_result         = await peer.get_metadata(bucket_id=bucket_id, key=key, headers=headers)
                     if metadata_result.is_err:
                         detail = "Fail to fetch metadata from peer {}".format(peer.peer_id)
                         self.replica_manager.remove_replicas(bucket_id=bucket_id,key=key)
@@ -746,9 +746,16 @@ class BucketsController():
                             response.headers["Content-Disposition"] = f"attachment; filename={_filename}" 
                         return response
 
-                    result                   = peer.get_streaming(bucket_id=bucket_id,key=key,headers=headers)
-
+                    result                   = await peer.get_streaming(bucket_id=bucket_id,key=key,headers=headers)
+                    print("*"*20)
+                    print("RESULT", result)
+                    print("*"*20)
                     if result.is_err:
+                        self.log.error({
+                            "bucket_id":bucket_id,
+                            "key":key,
+                            "detail": str(result.unwrap_err())
+                        })
                         raise HTTPException(status_code=404, detail="Ball({}@{}) not found".format(bucket_id,key))
                     else:
                         response       = result.unwrap()
@@ -823,7 +830,7 @@ class BucketsController():
                 peers = await self.storage_peer_manager.get_available_peers()
                 responses:List[Metadata] = []
                 for peer in peers:
-                    result = peer.get_chunks_metadata(bucket_id = bucket_id, key = ball_id)
+                    result = await peer.get_chunks_metadata(bucket_id = bucket_id, key = ball_id)
 
                     if result.is_err:
                         continue
@@ -888,7 +895,7 @@ class BucketsController():
                     # print("PEERS",peers)
                     for peer in  peers:
                         timestamp = T.time_ns()
-                        result = peer.delete(bucket_id=_bucket_id, key= _key, timeout=30)
+                        result = await peer.delete(bucket_id=_bucket_id, key= _key, timeout=30)
                         if result.is_ok:
                             res = result.unwrap()
                             # print("PEER.DELETE.RESULT", res)
@@ -968,7 +975,7 @@ class BucketsController():
                     default_del_by_ball_id_response = DeletedByBallIdResponse(n_deletes=0, ball_id=_ball_id)
                     for peer in  peers:
                         start_time = T.time()
-                        chunks_metadata_result:Result[Iterator[Metadata],Exception] = peer.get_chunks_metadata(
+                        chunks_metadata_result:Result[Iterator[Metadata],Exception] = await peer.get_chunks_metadata(
                             key=_ball_id,
                             bucket_id=_bucket_id,
                             headers=headers
@@ -982,7 +989,7 @@ class BucketsController():
                                 if i ==0:
                                     combined_key = "{}@{}".format(metadata.bucket_id,metadata.key)
 
-                                del_result = peer.delete(bucket_id=_bucket_id, key=metadata.key)
+                                del_result = await peer.delete(bucket_id=_bucket_id, key=metadata.key)
                                 service_time = T.time() - start_time
                                 if del_result.is_ok:
                                     del_response = del_result.unwrap()

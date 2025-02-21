@@ -39,16 +39,17 @@ log                          = Log(
 
 
 
-async def __get_stats(peer:InterfaceX.Peer, start:int =0, end:int  = 100):
+async def __get_stats(peer:InterfaceX.AsyncPeer, start:int =0, end:int  = 100):
     return peer.get_stats(start=  start, end= end)
 
 
-async def get_stats_from_peers(peers:List[InterfaceX.Peer],pagination:Dict[str,Pagination]={}):
+async def get_stats_from_peers(peers:List[InterfaceX.AsyncPeer],pagination:Dict[str,Pagination]={}):
     for i,peer in enumerate(peers):
         # start,end,completed = 0 ,100,False
         if peer.peer_id in pagination:
             start,end, completed = pagination.get(peer.peer_id).soft_next()
-            yield asyncio.create_task(__get_stats(peer=peer,  start=start,end=end ))
+            # yield asyncio.create_task( __get_stats(peer=peer,  start=start,end=end ))
+            yield asyncio.create_task(peer.get_stats(start=start,end=end ) )
 
 
 
@@ -69,7 +70,10 @@ async def run_rm(
         _queue_tick_timeout  = HF.parse_timespan(params.heartbeat_timeout)
         peers                = await rm.spm.get_available_peers()
         peers_ids            = list(map(lambda x :x.peer_id, peers))
-        local_n_balls_map    = dict([ (p.peer_id,p.get_balls_len().unwrap_or(0)) for p in peers])
+
+        local_n_balls_map    = dict([ (p.peer_id,(await p.get_balls_len()).unwrap_or(0)) for p in peers])
+
+
         paginations:Dict[str,Pagination] = dict([(peer_id,Pagination(n = n, batch_size=params.batch_size)) for peer_id,n in local_n_balls_map.items()])
         await rm.update_params(paginations = paginations)
         
@@ -90,13 +94,13 @@ async def run_rm(
         elapsed = T.time() - last_time
         try:
             event               = rm.q.get_nowait()
-            print("EVENT_RM")
+            # print("EVENT_RM")
             peers               = await rm.spm.get_available_peers()
             if len(peers)==0:
                 log.warning("No available storage peers.")
                 continue
             # print("CURRENT", peers)
-            current_total_balls_map:Dict[str,int]      = dict([ (p.peer_id,p.get_balls_len().unwrap_or(0)) for p in peers])
+            current_total_balls_map:Dict[str,int]      = dict([ (p.peer_id,(await p.get_balls_len()).unwrap_or(0)) for p in peers])
 
             total_n_balls = sum(list(current_total_balls_map.values()))
             
