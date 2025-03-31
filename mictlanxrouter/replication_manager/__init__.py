@@ -348,7 +348,7 @@ class ReplicaManager(object):
                 span.add_event(name="rm.current_replicas", attributes={"current_replicas":list(current_replicas)})
                 span.add_event(name="rm.filtered.available_replicas", attributes={"available_replicas":result_list })
                 return result_list
-            # return list(_all_peers_ids.difference(current_replicas))
+            
     async def get_available_peers(self,bucket_id:str,key:str)->List[InterfaceX.AsyncPeer]:
         try:
             xs = await self.get_available_peers_ids(bucket_id=bucket_id,key=key)

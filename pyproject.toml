@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mictlanxrouter"
-version = "0.0.157"
+version = "0.0.161.alpha-5"
 description = ""
 authors = ["Ignacio Castillo <ignacio.bcastillo@gmail.com>"]
 readme = "README.md"
@@ -28,8 +28,8 @@ opentelemetry-exporter-zipkin = "^1.25.0"
 prometheus-fastapi-instrumentator = "^7.0.0"
 hypercorn = "^0.17.3"
 aiofiles = "^24.1.0"
-mictlanx = {path = "../mictlanx/dist/mictlanx-0.0.160a6.tar.gz"}
 lmdb = "^1.6.2"
+mictlanxrm = "0.0.161a4"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
 more-itertools = "^10.2.0"

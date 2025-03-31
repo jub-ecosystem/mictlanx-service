@@ -1,5 +1,5 @@
 --extra-index-url https://test.pypi.org/simple
-
+mictlanxrm==0.0.161a2
 aiofiles==24.1.0  
 aiorwlock==1.4.0  
 fastapi==0.111.1  
@@ -9,7 +9,7 @@ humanfriendly==10.0
 hypercorn==0.17.3  
 idna==3.10  
 ipaddress==1.0.23  
-mictlanx ==0.0.160a6
+mictlanx ==0.0.161a2
 nanoid==2.0.0  
 numpy==1.24.4  
 opentelemetry-api==1.25.0  

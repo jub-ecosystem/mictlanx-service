@@ -453,17 +453,8 @@ class StoragePeerManager:
                 # })
                 return peers_ids
  
-    async def get_available_peers(self)->List[Peer]:
-        async with self.lock.reader_lock:
-            return self.available_peers
     
-    async def get_unavailable_peers(self):
-        async with self.lock.reader_lock:
-            return self.unavailable_peers
     
-    async def get_peers(self):
-        async with self.lock.reader_lock:
-            return self.peers
     
     async def get_peers_ids(self):
         async with self.lock.reader_lock:
@@ -481,10 +472,6 @@ class StoragePeerManager:
         async with self.lock.reader_lock:
             return len(self.unavailable_peers) 
 
-    async def get_available_peers_ids(self):
-        async with self.lock.reader_lock:
-            return list(set(list(map(lambda x:x.peer_id, self.available_peers))))
-    
     async def get_len_available_peers(self)->int:
         async with self.lock.reader_lock:
             return len(self.available_peers)
@@ -493,9 +480,6 @@ class StoragePeerManager:
         async with self.lock.reader_lock:
             return len(self.unavailable_peers)
 
-    async def get_unavailable_peers_ids(self)->List[str]:
-        async with self.lock.reader_lock:
-            return list(set(list(map(lambda x:x.peer_id, self.unavailable_peers))))
         
     async def get_tupled_peers(self):
         for peer in await self.get_available_peers():
@@ -557,11 +541,7 @@ class StoragePeerManager:
         await self.leave_peer(peer_id=peer_id)
         res = self.summoner.delete_container(container_id=peer_id)
         return res.is_ok
-        # async with self.lock.writer_lock:
-        #     n = len(self.available_peers + self.unavailable_peers)
-        #     self.available_peers  = list(filter(lambda peer: peer.peer_id != peer_id, self.available_peers))
-        #     self.unavailable_peers  = list(filter(lambda peer: peer.peer_id != peer_id, self.unavailable_peers))
-        #     return n > len(self.available_peers) + len(self.unavailable_peers)
+    
    
     async def leave_peer(self,peer_id:str)->bool:
         async with self.lock.writer_lock:
@@ -806,6 +786,12 @@ class StoragePeerManager:
             span.add_event(name="unavailable.failed",attributes={"peer_id":peer_id})
             return False
         
+    
+    async def get_unavailable_peers(self):
+        async with self.lock.reader_lock:
+            return self.unavailable_peers
+
+
     async def __get_ufs(self,
         peer:Peer,
         timeout:int=60,
@@ -851,6 +837,24 @@ class StoragePeerManager:
                 timeout=timeout
             ))
         
+    
+
+
+    async def get_available_peers_ids(self):
+        async with self.lock.reader_lock:
+            return list(set(list(map(lambda x:x.peer_id, self.available_peers))))
+ 
+    async def get_unavailable_peers_ids(self)->List[str]:
+        async with self.lock.reader_lock:
+            return list(set(list(map(lambda x:x.peer_id, self.unavailable_peers))))
+
+    async def get_available_peers(self)->List[Peer]:
+        async with self.lock.reader_lock:
+            return self.available_peers
+    async def get_peers(self):
+        async with self.lock.reader_lock:
+            return self.peers
+
     async def check_peers_availability(self) -> Tuple[List[str], List[str]]:
         """Returns a tuple of the list of the peers ids -> (available, unavailable) """
         with self.tracer.start_as_current_span("spm.check.peers.availability") as span:
