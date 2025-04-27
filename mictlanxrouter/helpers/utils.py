@@ -1,13 +1,38 @@
 import os
 from option import Some, NONE,Result,Ok,Err
 import time as T
+from fastapi import Request
 from mictlanx.v4.summoner.summoner import SummonContainerPayload,MountX,ExposedPort
-from typing import Dict,List
+from typing import Dict,List,AsyncGenerator
 import humanfriendly as HF
 import json as J
+import httpx
+import asyncio
 
 class Utils:
-    
+    @staticmethod
+    async def safe_content_generator(peer_resp: httpx.Response,
+                                    chunk_size: int,
+                                    logger,
+                                    ctx: str):
+        """
+        Relay bytes from the peer (inner HTTP call) to the outer client.
+        * Never* raise after the first chunk has been yielded.
+        """
+        try:
+            async for chunk in peer_resp.aiter_bytes(chunk_size):
+                yield chunk                    # real data
+                await asyncio.sleep(0)         # cooperative scheduling
+        except Exception as exc:
+            logger.warning({
+                "event": "PEER.STREAM.FAIL",
+                "ctx":   ctx,
+                "detail": repr(exc)
+            })
+            # send a zero‑byte frame so Starlette finishes the response cleanly
+            yield b""
+        finally:
+            await peer_resp.aclose()
     @staticmethod
     def dict_to_string(d):
         # Convert each key-value pair to a "key=value" string and join them with spaces
@@ -18,6 +43,22 @@ class Utils:
             return x.lower() in ["true", "1", "t", "y", "yes"]
         else:
             return False
+    @staticmethod
+    async def get_raw(request: Request) -> bytes:
+        # Starlette caches the result, so this is safe *once*
+        raw = await request.body()
+        return raw
+    @staticmethod
+    def bytes_to_stream(data: bytes, chunk_size: int = 64 * 1024) -> AsyncGenerator[bytes, None]:
+        """
+        Lazily yield `data` in `chunk`‑sized pieces.
+        Number of chunks  = ceil(len(data) / chunk).
+        """
+        async def _gen() -> AsyncGenerator[bytes, None]:
+            for i in range(0, len(data), chunk_size):
+                # zero‑copy slice, O(1)
+                yield data[i : i + chunk_size]
+        return _gen()
     @staticmethod
     def read_peers(path:str)->Result[Dict[str,SummonContainerPayload],Exception]:
         # MICTLANX_ROUTER_PEERS_JSON_PATH = "/home/nacho/Programming/Python/mictlanx-router/peers.json"

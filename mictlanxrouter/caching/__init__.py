@@ -225,7 +225,12 @@ class LRUSharedMemoryCache(CacheX):
             size = len(value)
             current_used_capacity = self.used_capacity + size
             can_store = current_used_capacity <= self.capacity_storage
+            exists_in_fs = self.shared_memory_exists(name=key)
+            if exists_in_fs:
+                self.remove(key=key)
+
             exists_in_local = key in self.__cache
+
             log.debug({
                 "event":"PUT",
                 "key":key,
@@ -235,6 +240,7 @@ class LRUSharedMemoryCache(CacheX):
                 "total_capacity":HF.format_size(self.capacity_storage),
                 "uf":self.get_uf(),
                 "current_used_capacity": HF.format_size(current_used_capacity),
+                "exists_fs":exists_in_fs,
                 "can_store":can_store, 
                 "exists_local":exists_in_local,
             })
@@ -247,6 +253,8 @@ class LRUSharedMemoryCache(CacheX):
                     old_shm.unlink()
                 except FileNotFoundError:
                     pass
+
+            
             # If there's not enough storage, remove least recently used items.
             elif not can_store:
                 # Remove items until we can store the new value.
@@ -328,7 +336,7 @@ class LRUSharedMemoryCache(CacheX):
                 self.__cache.move_to_end(key)
                 log.debug({
                     "event":"GET",
-                    "key":key,
+                    "key":candidate,
                     "exists_local":exists
                 })
                 return Some(result)
@@ -336,6 +344,7 @@ class LRUSharedMemoryCache(CacheX):
             return NONE
 
     def remove(self, key: str):
+        t1 = T.time()
         entry = self.__cache.pop(key, None)
         if entry:
             shm_name, _ = entry
@@ -343,6 +352,7 @@ class LRUSharedMemoryCache(CacheX):
                 shm = shared_memory.SharedMemory(name=shm_name)
                 shm.close()
                 shm.unlink()
+                log.debug({"event":"REMOVE", "key":key,"response_time":T.time() - t1})
             except FileNotFoundError:
                 pass
 

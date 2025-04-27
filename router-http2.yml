@@ -1,7 +1,7 @@
 services:
   
   mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.0.161-alpha.5
+    image: nachocode/mictlanx:router-0.0.161a6
     container_name: mictlanx-router-0
     environment:
       - MICTLANX_ROUTER_SERVICE_NAME=${MICTLANX_ROUTER_SERVICE_NAME:-mictlanx-router}
@@ -57,6 +57,24 @@ services:
       - mictlanx
     restart: unless-stopped
 
+  mictlanx-rm:
+    image: nachocode/mictlanx:rm-0.0.161a6
+    container_name: "mictlanx-rm"
+    environment:
+      SUMMONER_IP_ADDR: "mictlanx-summoner-0"
+      SUMMONER_PROTOCOL: "http"
+      SUMMONER_PORT: "15000"
+      SUMMONER_API_VERSION: "3"
+      MICTLANX_PEERS_PROTOCOL: "http"
+      PEERS: "mictlanx-peer-0:mictlanx-peer-0:24000 mictlanx-peer-1:mictlanx-peer-1:24001"
+      MICTLANX_PORT: "5555"
+      MICTLANX_IP_ADDR: "*"
+      MICTLANX_PROTOCOL: "tcp"
+    command: python3 main.py
+    ports:
+      - "5555:5555"
+    networks:
+      - mictlanx
 
   mictlanx-summoner-0:
     image: nachocode/mictlanx:summoner
@@ -85,7 +103,6 @@ services:
       - mictlanx
 volumes:
   mictlanx-router-0_logs:
-  tezcanalyticx-0:
   mictlanx-summoner-0:
 
 networks:

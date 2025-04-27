@@ -16,6 +16,7 @@ from mictlanxrouter.dto.index import PeerElasticPayload
 from mictlanx.v4.interfaces.index import AsyncPeer
 from mictlanxrm.client import SPMClient
 import mictlanxrm.models as MX
+
 class PeersController():
     def __init__(self, 
             log:Log,

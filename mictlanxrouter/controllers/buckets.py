@@ -1,26 +1,34 @@
 import os
 import asyncio
 import humanfriendly as HF
-from mictlanx.logger.log import Log
-from fastapi import APIRouter,Header,HTTPException,UploadFile,Response,Request,Depends,BackgroundTasks
-from fastapi.responses import StreamingResponse
-from opentelemetry.trace import Span,Status,StatusCode,Tracer
 from typing import Annotated,Union,List,Dict,Tuple,Iterator
-from mictlanxrouter.dto.metadata import Metadata
-import httpx
-from mictlanxrouter.dto import Operations,DeletedByBallIdResponse,DeletedByKeyResponse
-from option import Result,Ok,Err
 import time as T
-import mictlanx.v4.interfaces as InterfaceX
-# .responses import PeerPutMetadataResponse,PutMetadataResponse
+import requests  as R
+# 
+from option import Result,Ok,Err
+# 
+import httpx
+# 
+from opentelemetry.trace import Span,Status,StatusCode,Tracer
+# 
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-import requests  as R
-from mictlanx.utils import Utils as MictlanXUtils
+from fastapi import APIRouter,Header,HTTPException,UploadFile,Response,Request,Depends,BackgroundTasks
+from fastapi.responses import StreamingResponse
+# 
 from nanoid import generate as nanoid
-from mictlanxrouter.caching import CacheX
+# 
+from mictlanx.logger.log import Log
+from mictlanx.utils import Utils as MictlanXUtils
+import mictlanx.v4.interfaces as InterfaceX
+# 
 from mictlanxrm.client import SPMClient
 from mictlanxrm.models import TaskX
+# 
+from mictlanxrouter.dto import Operations,DeletedByBallIdResponse,DeletedByKeyResponse
+from mictlanxrouter.caching import CacheX
+from mictlanxrouter.dto.metadata import Metadata
+from mictlanxrouter.helpers.utils import Utils
 
 class BucketsController():
     def __init__(self,
@@ -34,7 +42,7 @@ class BucketsController():
         self.tracer               = tracer
         self.cache                = cache
         self.max_timeout = HF.parse_timespan(max_timeout)
-        self.spm_client = SPMClient()
+        # self.spm_client = SPMClient()
         self.add_routes()
 
     def get_spm_client(self):
@@ -51,20 +59,28 @@ class BucketsController():
                 "detail":str(e)
             })
             raise e
-        finally:
-            client.socket.close()
+        # finally:
+        #     client.socket.close()
 
-    def after_operation_task(self,operation:str, bucket_id:str, key:str, t1:float):
+    def after_operation_task(self,operation:str, bucket_id:str, key:str, t1:float,size:int):
         def __inner():
             self.log.debug({
                 "operation":operation,
                 "bucket_id":bucket_id,
                 "key":key,
+                "size":size,
                 "response_time":T.time() - t1
             })
         return __inner
             # print("GET")
             # self.spm_client
+
+    def spm_client_close(self,x:SPMClient):
+        async def __inner():
+            y = await x.close()
+            return None
+            
+        return __inner
 
 
     def add_routes(self):
@@ -184,11 +200,7 @@ class BucketsController():
             with self.tracer.start_as_current_span("get.metadata") as span:
                 try:
                     span:Span = span
-                    span.set_attributes({
-                        "bucket_id":bucket_id,
-                        "key":key
-                    })
-                    start_at   = T.time_ns()
+              
                     start_time = T.time()
 
                     access_start_time = T.time_ns()
@@ -218,16 +230,17 @@ class BucketsController():
                         })
                         raise HTTPException(status_code=404, detail=detail)
                     most_recent_metadata = metadata_result.unwrap()
+                    end_at = T.time()
                     self.log.info({
                         "event":"GET.METADATA",
-                        "start_at":start_at,
-                        "end_at":T.time_ns(),
+                        "arrival_time":start_time,
+                        "end_at":end_at,
                         "bucket_id":bucket_id,
                         "key":key,
                         "peer_id":most_recent_metadata.peer_id,
                         "local_peer_id":most_recent_metadata.local_peer_id,
                         "size":most_recent_metadata.metadata.size,
-                        "response_time":T.time()- start_time
+                        "response_time":end_at- start_time
                     })
                     # METADATA_ACCESS_COUNTER.labels(bucket_id=bucket_id, key = key).inc()
 
@@ -302,7 +315,6 @@ class BucketsController():
             with self.tracer.start_as_current_span("put.metadata") as span:
                 span:Span      = span  
                 arrival_time   = T.time()
-                start_at       = T.time_ns()
                 key             = MictlanXUtils.sanitize_str(x = metadata.key)
                 bucket_id       = MictlanXUtils.sanitize_str(x = bucket_id)
                 group_id        = nanoid()
@@ -393,8 +405,11 @@ class BucketsController():
                     if add_task_result.is_err:
                         raise add_task_result.unwrap_err()
                     # tasks_ids.append(task.task_id)
+                    end_at = T.time()
                     self.log.info({
                         "event":"PUT.METADATA",
+                        "arrival_time": arrival_time,
+                        "end_at":end_at,
                         "bucket_id":bucket_id,
                         "key":metadata.key,
                         "size":metadata.size,
@@ -402,7 +417,7 @@ class BucketsController():
                         "task_id":task.task_id,
                         "content_type":task.content_type,
                         "replica_factor":metadata.replication_factor,
-                        "response_time":T.time()- inner_start_time
+                        "response_time":end_at- arrival_time
                     })
 
                     put_metadata_response = InterfaceX.PutMetadataResponse(
@@ -431,7 +446,6 @@ class BucketsController():
         ):
             with self.tracer.start_as_current_span("put.data") as span:
                 span:Span = span
-                start_at   = T.time_ns()
                 start_time = T.time()
                 
                 # =========================GET.TASK=======================================
@@ -442,7 +456,7 @@ class BucketsController():
                     detail = "Task({}) not found".format(task_id)
                     raise HTTPException(status_code=404, detail=detail)
                 task = maybe_task.unwrap()
-                background_task.add_task(self.after_operation_task(operation="PUT", bucket_id=task.bucket_id, key=task.key,t1=start_time))
+                background_task.add_task(self.after_operation_task(operation="PUT", bucket_id=task.bucket_id, key=task.key,t1=start_time,size=task.size))
                 if not task.operation.value == Operations.PUT.value:
                     raise HTTPException(status_code=409, detail=f"Expected task operation [PUT], but was received [{task.operation}]")
 
@@ -477,16 +491,17 @@ class BucketsController():
                         })
                         raise HTTPException(detail = str(result.unwrap_err()), status_code= 500 )
                     span.add_event(name="peer.put.data",attributes={},timestamp=get_task_timestamp)
+                    end_at = T.time()
                     self.log.info({
                         "event":"PUT.DATA",
-                        "start_at":start_at,
-                        "end_at":T.time_ns(),
+                        "arrival_time":start_time,
+                        "end_at":end_at,
                         "bucket_id":task.bucket_id,
                         "key":task.key,
                         "size":task.size,
                         "task_id":task_id,
                         "peer_id":peer.peer_id,
-                        "response_time":T.time()- start_time
+                        "response_time":end_at- start_time
                     })
                     get_task_timestamp = T.time_ns()
                     await spm_client.delete_task(task_id=task_id)
@@ -517,9 +532,11 @@ class BucketsController():
             task_id:str,
             request: Request,
             background_task:BackgroundTasks,
-            spm_client:SPMClient = Depends(self.get_spm_client)
+            spm_client:SPMClient = Depends(self.get_spm_client), 
+            chunk_size:Annotated[Union[str,None], Header()]="10mb",
 
         ):
+            _chunk_size = HF.parse_size(chunk_size)
             with self.tracer.start_as_current_span("put.chunked") as span:
                 span:Span = span
                 start_time = T.time()
@@ -536,13 +553,16 @@ class BucketsController():
                         operation="PUT",
                         bucket_id=task.bucket_id,
                         key= task.key,
-                        t1 = start_time
+                        t1 = start_time,
+                        size=task.size
                     ))
                     if not task.operation.value == Operations.PUT.value:
                         raise HTTPException(status_code=409, detail=f"Expected task operation [PUT], but was received [{task.operation}]")
 
                     # ======================= GET PEER ============================
                     gt_start_time = T.time_ns()
+                    raw = await Utils.get_raw(request=request)
+
                     for peer_id in task.peers:
                         maybe_peer = await spm_client.get_peer_by_id(peer_id=peer_id)
                         if maybe_peer.is_err:
@@ -554,7 +574,9 @@ class BucketsController():
                         # ======================= PUT_CHUNKS ============================
                         gt_start_time = T.time_ns()
                         headers       = {}
-                        chunks        = request.stream()
+                        # chunks        = request.stream()
+                        chunks        = Utils.bytes_to_stream(data = raw, chunk_size=_chunk_size)
+                        # request.stream()
                         result        = await peer.put_chunked(task_id=task_id, chunks = chunks,headers=headers)
                         if result.is_err:
                             raise result.unwrap_err()
@@ -567,9 +589,14 @@ class BucketsController():
                     res = await spm_client.delete_task(task_id=task_id)
                     span.add_event(name="delete.task",attributes={"task_id":task_id}, timestamp=gt_start_time)
                     # 
+
+                    # value = await request.stream()
+                    put_result = self.cache.put(key=f"{task.bucket_id}@{task.key}", value=raw )
+                    end_at = T.time()
                     self.log.info({
                         "event":"PUT.DATA",
-                        "x_timestamp":T.time_ns(),
+                        "arrival_time":start_time,
+                        "end_at":end_at,
                         "bucket_id":task.bucket_id,
                         "key":task.key,
                         "size":task.size,
@@ -577,7 +604,7 @@ class BucketsController():
                         "peers":task.peers,
                         "content_type":task.content_type,
                         "deleted_tasks":res.is_ok,
-                        "response_time":T.time() - start_time
+                        "response_time":end_at - start_time
                     })
 
                     return JSONResponse(content=jsonable_encoder(response))
@@ -665,6 +692,131 @@ class BucketsController():
                 chunk = bytes(data[i:i + chunk_size])
                 yield chunk  # ✅ Yield memoryview slices directly
 
+
+        @self.router.get("/api/v4/buckets/{bucket_id}/{ball_id}/merge")
+        async def get_data_merged(
+            bucket_id:str,
+            ball_id:str,
+            background_tasks:BackgroundTasks,
+            content_type:str = "",
+            chunk_size:Annotated[Union[str,None], Header()]="10mb",
+            peer_id:Annotated[Union[str,None], Header()]=None,
+            # local_peer_id:Annotated[Union[str,None], Header()]=None,
+            filename:str = "",
+            attachment:bool = False,
+            force_get:Annotated[Union[int,None], Header()] = 1,
+            spm_client:SPMClient = Depends(self.get_spm_client),
+
+        ):
+            force = bool(force_get)
+            chunk_size_bytes = HF.parse_size(chunk_size or "1mb")
+            start_time = T.time()
+
+            # Schedule your after-operation logging/cleanup.
+            background_tasks.add_task(self.spm_client_close(spm_client))
+
+
+            # 1) Pick a peer for metadata (either specified or the first chunk)
+            if peer_id:
+                peer_res = await spm_client.get_peer_by_id(peer_id=peer_id)
+            else:
+                peer_res = await spm_client.get(bucket_id=bucket_id, key=f"{ball_id}_0")
+
+            if peer_res.is_err:
+                raise HTTPException(404, "No available peer; try again later.")
+
+            peer = peer_res.unwrap()
+            # peer.get_bucket_metadata()
+
+            # 2) Fetch metadata to learn num_chunks
+            md_res = await peer.get_metadata(bucket_id=bucket_id, key=f"{ball_id}_0")
+            if md_res.is_err:
+                raise HTTPException(404, "Could not fetch metadata.")
+
+            metadata = md_res.unwrap()
+            num_chunks = int(metadata.metadata.tags.get("num_chunks", 0))
+            if num_chunks <= 0:
+                raise HTTPException(404, "Invalid number of chunks.")
+            # 3) Define our async generator that yields each chunk in turn
+            async def __inner_get(ckey:str ):
+                max_tries = 10
+                tries = 0
+                while tries < max_tries:
+                    peer_res = await spm_client.get(bucket_id=bucket_id, key=ckey)
+                    if peer_res.is_err:
+                        tries+=1
+                        # spm_client=self.get_spm_client()
+                        await asyncio.sleep(2)
+                        print(f"Trying[{tries}].... {peer_res.unwrap_err()}")
+                        continue
+                    else: 
+                        return peer_res
+            async def merged_stream():
+                size = 0 
+                for idx in range(num_chunks):
+                    chunk_key = f"{ball_id}_{idx}"
+                    cache_key = f"{bucket_id}@{chunk_key}"
+
+                    # Try cache if not forcing a fresh fetch
+                    if not force:
+                        cached_opt = self.cache.get(cache_key)
+                        if cached_opt.is_some:
+                            shm_data = cached_opt.unwrap()  # SharedMemoryData
+                            try:
+                                data_bytes = shm_data.get_data().tobytes()
+                                size +=len(data_bytes)
+                            finally:
+                                shm_data.close()
+                            yield data_bytes
+                            continue
+
+                    # Otherwise fetch from peer
+                    peer_res = await __inner_get(chunk_key)
+                            
+                    if peer_res.is_err:
+                        raise HTTPException(404, f"Chunk {chunk_key} not found on any peer.")
+
+                    chunk_peer = peer_res.unwrap()
+                    stream_res = await chunk_peer.get_streaming(bucket_id, chunk_key)
+                    if stream_res.is_err:
+                        raise HTTPException(500, f"Failed streaming chunk {chunk_key}.")
+
+                    resp = stream_res.unwrap()
+                    chunk_data = resp.content
+                    size+=len(chunk_data)
+                    self.cache.put(cache_key, chunk_data)
+                    yield chunk_data
+                background_tasks.add_task(
+                    self.after_operation_task,
+                    "GET",
+                    bucket_id,
+                    ball_id,
+                    start_time,
+                    size
+                )
+
+            # 4) Build the StreamingResponse
+
+            # fstream = await merged_stream()
+            end_time = T.time()
+            media = content_type or metadata.metadata.content_type or "application/octet-stream"
+            response = StreamingResponse(merged_stream(), media_type=media)
+            self.log.info({
+                "event":"GET.DATA",
+                "arrival_time":start_time,
+                "end_at":end_time,
+                "bucket_id":bucket_id,
+                "key":ball_id,
+                "force":force,
+                "response_time": end_time- start_time 
+            })
+            if attachment:
+                fname = filename or metadata.metadata.tags.get("fullname", f"{ball_id}")
+                response.headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+
+            return response
+
+
         @self.router.get("/api/v4/buckets/{bucket_id}/{key}")
         async def get_data(
             bucket_id:str,
@@ -676,11 +828,12 @@ class BucketsController():
             local_peer_id:Annotated[Union[str,None], Header()]=None,
             filename:str = "",
             attachment:bool = False,
-            force_get:bool = False,
+            force_get:Annotated[Union[int,None], Header()] = 0,
             spm_client:SPMClient = Depends(self.get_spm_client),
 
         ):
-
+            force = bool(force_get)
+            chunk_size_bytes= HF.parse_size(chunk_size)
             with self.tracer.start_as_current_span("get.data") as span:
             
                 span:Span = span 
@@ -689,14 +842,10 @@ class BucketsController():
                     "key":key
                 })
                 try:
-                    start_at               = T.time_ns()
                     start_time             = T.time()
                     get_peer_start_time    = T.time_ns()
                     peer_id_param_is_empty = peer_id == "" or peer_id == None
 
-                    background_task.add_task(self.after_operation_task(
-                        operation="GET",bucket_id=bucket_id, key=key, t1 = start_time
-                    ))
                     if not (peer_id_param_is_empty):
                         maybe_peer = await spm_client.get_peer_by_id(peer_id=peer_id)
                     else:
@@ -737,44 +886,49 @@ class BucketsController():
                         raise HTTPException(status_code=404, detail=detail)
                 
                     metadata = metadata_result.unwrap()
+                    background_task.add_task(self.after_operation_task(
+                        operation="GET",bucket_id=bucket_id, key=key, t1 = start_time,size =metadata.metadata.size
+                    ))
                     span.set_attributes({"size":metadata.metadata.size})
                     span.add_event(name="get.metadata", attributes={},timestamp=get_metadata_start_time)
                     # > ======================= GET.STREAMING ============================
                     get_streaming_start_time = T.time_ns()
-                    cache_result = self.cache.get(key=f"{bucket_id}@{key}")
+
                     _peer_id       = metadata.peer_id if not peer_id else peer_id
                     _local_peer_id = metadata.local_peer_id if not local_peer_id else local_peer_id
-                    if cache_result.is_some and not force_get:
-                        cached_datax =cache_result.unwrap()
-                        self.log.info({
-                            "event":"GET.DATA.CACHING",
-                            "start_at":start_at,
-                            "end_at":T.time_ns(),
-                            "bucket_id":bucket_id,
-                            "key":key,
-                            "size":len(cached_datax),
-                            "peer_id":_peer_id,
-                            "local_peer_id":_local_peer_id,
-                            "hit":1,
-                            "chunk_size":chunk_size,
-                            "response_time":T.time() - start_time 
-                        })
-                        chunk_size_bytes= HF.parse_size(chunk_size)
-                        # print("CHUNKL_SIOZE_BYUTES", chunk_size_bytes)
-                        # with cached_datax as cache_data:
-                        response = StreamingResponse(memoryview_stream(data = cached_datax.get_data(), chunk_size=chunk_size_bytes ), media_type=content_type)
-                        background_task.add_task(cached_datax.close)
-                    
-                        _filename = metadata.metadata.tags.get("fullname", metadata.metadata.tags.get("filename", "{}_{}".format(bucket_id,key) ) ) if filename == "" else filename
+
+                    if not force:
+                        cache_result = self.cache.get(key=f"{bucket_id}@{key}")
+
+                        if cache_result.is_some:
+                            cached_datax =cache_result.unwrap()
+                            end_at = T.time()
+                            self.log.info({
+                                "event":"GET.DATA.CACHING",
+                                "arrival_time":start_time,
+                                "end_at":end_at,
+                                "bucket_id":bucket_id,
+                                "key":key,
+                                "size":len(cached_datax),
+                                "peer_id":_peer_id,
+                                "local_peer_id":_local_peer_id,
+                                "hit":1,
+                                "chunk_size":chunk_size,
+                                "force":force,
+                                "response_time":end_at - start_time 
+                            })
+                            # print("CHUNKL_SIOZE_BYUTES", chunk_size_bytes)
+                            # with cached_datax as cache_data:
+                            response = StreamingResponse(memoryview_stream(data = cached_datax.get_data(), chunk_size=chunk_size_bytes ), media_type=content_type)
+                            background_task.add_task(cached_datax.close)
                         
-                        if attachment:
-                            response.headers["Content-Disposition"] = f"attachment; filename={_filename}" 
-                        return response
+                            _filename = metadata.metadata.tags.get("fullname", metadata.metadata.tags.get("filename", "{}_{}".format(bucket_id,key) ) ) if filename == "" else filename
+                            
+                            if attachment:
+                                response.headers["Content-Disposition"] = f"attachment; filename={_filename}" 
+                            return response
 
                     result                   = await peer.get_streaming(bucket_id=bucket_id,key=key,headers=headers)
-                    print("*"*20)
-                    print("RESULT", result)
-                    print("*"*20)
                     if result.is_err:
                         self.log.error({
                             "bucket_id":bucket_id,
@@ -785,33 +939,35 @@ class BucketsController():
                     else:
                         response   = result.unwrap()
                         put_result = self.cache.put(key=f"{bucket_id}@{key}", value=response.content)
-                        print("CACHE_PUT_RESULT", put_result)
                         span.add_event("get.streaming", attributes={}, timestamp=get_streaming_start_time)
                         
-                        cg             = content_generator(response=response,chunk_size=chunk_size)
+                        cg             = Utils.safe_content_generator(peer_resp=response, chunk_size=chunk_size_bytes, logger=self.log,ctx=f"{bucket_id}@{key}")
+                        # content_generator(response=response,chunk_size=chunk_size)
 
                         media_type     = response.headers.get('Content-Type',metadata.metadata.content_type) if content_type == "" else content_type
         # 
 
+                        end_at = T.time()
                         self.log.info({
                             "event":"GET.DATA",
-                            "start_at":start_at,
-                            "end_at":T.time_ns(),
+                            "arrival_time":start_time,
+                            "end_at":end_at,
                             "bucket_id":bucket_id,
                             "key":key,
                             "size":metadata.metadata.size,
                             "peer_id":_peer_id,
                             "local_peer_id":_local_peer_id,
                             "hit":int(_local_peer_id==_peer_id),
-                            "response_time":T.time() - start_time 
+                            "force":force,
+                            "response_time":end_at- start_time 
                         })
-                        response  = StreamingResponse(cg, media_type=media_type)
+                        response  = StreamingResponse(content=cg, media_type=media_type,background=background_task)
 
                         _filename = metadata.metadata.tags.get("fullname", metadata.metadata.tags.get("filename", "{}_{}".format(bucket_id,key) ) ) if filename == "" else filename
                         if attachment:
                             response.headers["Content-Disposition"] = f"attachment; filename={_filename}" 
 
-                        # ACCESS_COUNTER.labels(bucket_id=bucket_id, key = key).inc()
+
                         return response
 
                         # return JSONResponse(content=jsonable_encoder(most_recent_metadata) )
@@ -843,6 +999,11 @@ class BucketsController():
                         "status_code":500
                     })
                     raise HTTPException(status_code=500, detail=detail  )
+        
+        
+      
+
+        
         @self.router.get("/api/v4/buckets/{bucket_id}/metadata/{ball_id}/chunks")
         async def get_metadata_chunks(
             bucket_id:str,
@@ -945,6 +1106,7 @@ class BucketsController():
             with self.tracer.start_as_current_span("delete") as span:
                 span:Span = span
                 span.set_attributes({"bucket_id":bucket_id, "key":key})
+                arrival_time = T.time()
                 _bucket_id = MictlanXUtils.sanitize_str(x=bucket_id)
                 _key       = MictlanXUtils.sanitize_str(x=key)
                 try:
@@ -995,12 +1157,16 @@ class BucketsController():
                             if res.n_deletes>=0:
                                 default_delete_by_key_response.n_deletes+= res.n_deletes
                                 span.add_event(name="{}.delete".format(peer.peer_id), timestamp=timestamp)
-                    response_time = T.time() - start_time
+                    c_result = self.cache.remove(key=f"{bucket_id}@{key}")
                     timestamp     = T.time_ns()
                     res           = await spm_client.delete(bucket_id=bucket_id,key=key)
                     span.add_event(name="remove.replicas", attributes={}, timestamp=timestamp)
+                    end_at = T.time()
+                    response_time = end_at - start_time
                     self.log.info({
                         "event":"DELETED.BY.KEY",
+                        "arrival_time":arrival_time,
+                        "end_at":end_at,
                         "bucket_id":_bucket_id,
                         "key":_key,
                         "n_deletes":default_delete_by_key_response.n_deletes,
@@ -1083,6 +1249,7 @@ class BucketsController():
                                 )
                                 service_time = T.time() - start_time
                                 if del_result.is_ok:
+                                    self.cache.remove(key=f"{bucket_id}@{metadata.key}")
                                     del_response = del_result.unwrap()
                                     if del_response.n_deletes>=0:
                                         default_del_by_ball_id_response.n_deletes+= del_response.n_deletes
@@ -1112,8 +1279,11 @@ class BucketsController():
                         res           = await self.replica_manager.remove_replicas(bucket_id=bucket_id,key=_ball_id)
                         return JSONResponse(content=jsonable_encoder(default_del_by_ball_id_response.model_dump()))
                     
+                    end_at = T.time()
                     self.log.info({
                         "event":"DELETED.BY.BALL_ID",
+                        "arrival_time":start_time,
+                        "end_at":end_at,
                         "bucket_id":_bucket_id,
                         "ball_id":_ball_id,
                         "n_deletes": default_del_by_ball_id_response.n_deletes,
