@@ -1,4 +1,4 @@
-from fastapi import APIRouter,HTTPException
+from fastapi import APIRouter,HTTPException,Response
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from mictlanx.logger.log import Log
@@ -31,5 +31,20 @@ class CacheControllers:
                         "uf": self.cache.get_uf()
                     })
                 )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        @self.router.delete("/api/v4/cache/reset")
+        def reset_cache():
+            try:
+                self.cache.clear()
+                return Response(content=None, status_code=204)
+                # return JSONResponse(
+                #     jsonable_encoder({
+                #         "total":self.cache.get_total_storage_capacity(),
+                #         "used":self.cache.get_used_storage_capacity(),
+                #         "available": self.cache.get_total_storage_capacity() - self.cache.get_used_storage_capacity(),
+                #         "uf": self.cache.get_uf()
+                #     })
+                # )
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))

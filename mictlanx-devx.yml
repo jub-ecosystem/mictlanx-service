@@ -1,16 +1,14 @@
 services:
   
-  mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.0.161a17
-    container_name: mictlanx-router-0
+  mictlanx-router-0xx:
+    image: nachocode/mictlanx:router-0.0.161a11
     environment:
       - MICTLANX_DAEMON_HOSTNAME=mictlanx-rm
-      - MICTLANX_DAEMON_PORT=5555
-      - MICTLANX_CACHE=0
+      - MICTLANX_DAEMON_PORT=5556
       - MICTLANX_DAEMON_PROTOCOL=tcp
       - LOG_PATH=${LOG_PATH:-/log}
       - MICTLANX_ROUTER_HOST=${MICTLANX_ROUTER_HOST:-localhost}
-      - MICTLANX_ROUTER_PORT=${MICTLANX_ROUTER_PORT:-60666}
+      - MICTLANX_ROUTER_PORT=${MICTLANX_ROUTER_PORT:-60668}
       - MICTLANX_ROUTER_MAX_WORKERS=${MICTLANX_ROUTER_MAX_WORKERS:-4}
       - MICTLANX_ROUTER_LB_ALGORITHM=${MICTLANX_ROUTER_LB_ALGORITHM:-ROUND_ROBIN}
       - MICTLANX_ROUTER_LOG_NAME=${MICTLANX_ROUTER_LOG_NAME:-mictlanx-router-0}
@@ -33,7 +31,7 @@ services:
       - MICTLANX_ROUTER_NETWORK_ID=${MICTLANX_ROUTER_NETWORK_ID:-mictlanx}
       - MICTLANX_ROUTER_BASE_PROTOCOL=${MICTLANX_ROUTER_BASE_PROTOCOL:-http}
 
-      - MICTLANX_PEERS=${MICTLANX_PEERS:-mictlanx-peer-0:mictlanx-peer-0:25000 mictlanx-peer-1:mictlanx-peer-1:25001 mictlanx-peer-2:mictlanx-peer-2:25002}
+      - MICTLANX_PEERS=${MICTLANX_PEERS:-mictlanx-peer-0xx:mictlanx-peer-0xx:27000 mictlanx-peer-1xx:mictlanx-peer-1xx:27001 mictlanx-peer-2xx:mictlanx-peer-2xx:27002}
       - MICTLANX_PROTOCOL=${MICTLANX_PROTOCOL:-http}
       - MICTLANX_API_VERSION=${MICTLANX_API_VERSION:-4}
       - MICTLANX_TIMEOUT=${MICTLANX_TIMEOUT:-3600}
@@ -43,25 +41,45 @@ services:
       - MICTLANX_SUMMONER_PORT=${MICTLANX_SUMMONER_PORT:-15000}
       - MICTLANX_SUMMONER_MODE=${MICTLANX_SUMMONER_MODE:-docker}
       - MICTLANX_SUMMONER_SUBNET=${MICTLANX_SUMMONER_SUBNET:-10.0.0.0/25}
-    command: gunicorn --worker-class uvicorn.workers.UvicornWorker  mictlanxrouter.server:app --bind ${MICTLANX_ROUTER_HOST-0.0.0.0}:${MICTLANX_ROUTER_PORT-60666}  --workers ${MICTLANX_WORKERS_ROUTER-1}
-    # command: hypercorn mictlanxrouter.server:app --bind ${MICTLANX_ROUTER_HOST-0.0.0.0}:${MICTLANX_ROUTER_PORT-60666} --certfile=/pems/cert.pem --keyfile=/pems/key.pem --workers ${MICTLANX_WORKERS_ROUTER-4}
-    ports:
-      - ${MICTLANX_ROUTER_PORT-60666}:${MICTLANX_ROUTER_PORT-60666}
+    command: hypercorn mictlanxrouter.server:app --bind ${MICTLANX_ROUTER_HOST-0.0.0.0}:${MICTLANX_ROUTER_PORT-60668} --workers ${MICTLANX_WORKERS_ROUTER-4}
+      #command: hypercorn mictlanxrouter.server:app --bind ${MICTLANX_ROUTER_HOST-0.0.0.0}:${MICTLANX_ROUTER_PORT-60668} --certfile=/pems/cert.pem --keyfile=/pems/key.pem --workers ${MICTLANX_WORKERS_ROUTER-4}
+      #ports:
+      #- ${MICTLANX_ROUTER_PORT-60668}:${MICTLANX_ROUTER_PORT-60668}
+      #- ${MICTLANX_ROUTER_PORT-60668}
     volumes:
       - mictlanx-router-0_logs:/log
-      - ./peers.json:/app/peers.json
-      - ./pems:/pems:ro
+      - /home/jcastillo/pems:/pems:ro
     networks:
       - mictlanx
+      - traefik-pub
     restart: unless-stopped
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.mxrouterxx.rule=Host(`apix.tamps.cinvestav.mx`) && PathPrefix(`/mictlanxx`)"
+        - "traefik.http.routers.mxrouterxx.entrypoints=websecure"
+        - "traefik.http.routers.mxrouterxx.tls=true"
+        - "traefik.http.routers.mxrouterxx.tls.certresolver=resolverx"
+        - "traefik.http.services.mxrouterxx.loadbalancer.server.port=60668"
+        - "traefik.http.routers.mxrouterxx.middlewares=strip-api-prefixxxx"
+        - "traefik.http.middlewares.strip-api-prefixxxx.stripprefix.prefixes=/mictlanxx"
+        - "traefik.docker.network=traefik-pub"
+
+      resources:
+        limits:
+          cpus: "8"
+          memory: "8G"
+      placement:
+        constraints: 
+          - "node.labels.index==13"
 
   mictlanx-rm:
-    image: nachocode/mictlanx:rm-0.0.161a15
+    image: nachocode/mictlanx:rm-0.0.161a7
     container_name: "mictlanx-rm"
     environment:
       MICTLANX_PEERS_PROTOCOL: "http"
-      PEERS: "mictlanx-peer-0:mictlanx-peer-0:25000 mictlanx-peer-1:mictlanx-peer-1:25001 mictlanx-peer-2:mictlanx-peer-2:25002"
-      MICTLANX_PORT: "5555"
+      PEERS: "mictlanx-peer-0xx:mictlanx-peer-0xx:27000 mictlanx-peer-1xx:mictlanx-peer-1xx:27001 mictlanx-peer-2xx:mictlanx-peer-2xx:27002"
+      MICTLANX_PORT: "5556"
       MICTLANX_IP_ADDR: "*"
       MICTLANX_PROTOCOL: "tcp"
       MICTLANX_DEBUG: "0"
@@ -104,24 +122,31 @@ services:
       PEER_MAX_INTERVAL_TIME: "20"
       SUMMONER_NETWORK_ID: "mictlanx"
     command: python3 main.py
-    ports:
-      - "5555:5555"
+      #ports:
+      # - "5556:5556"
     volumes:
       - mictlanxrmdb:/mictlanx/db
     networks:
       - mictlanx
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: "8G"
+      placement:
+        constraints: 
+          - "node.labels.index==13"
 
-  mictlanx-peer-0:
-    container_name: mictlanx-peer-0
+  mictlanx-peer-0xx:
     image: "nachocode/mictlanx:peer-0.0.160-alpha.1"
-    hostname: mictlanx-peer-0
+    hostname: mictlanx-peer-0xx
     environment:
       USER_ID: "6666"
       GROUP_ID: "6666"
       BIN_NAME: "peer"
-      NODE_ID: "mictlanx-peer-0"
-      NODE_PORT: "25000"
-      IP_ADDRESS: "mictlanx-peer-0"
+      NODE_ID: "mictlanx-peer-0xx"
+      NODE_PORT: "27000"
+      IP_ADDRESS: "mictlanx-peer-0xx"
       SERVER_IP_ADDR: "0.0.0.0"
       NODE_DISK_CAPACITY: "100000000000"
       NODE_MEMORY_CAPACITY: "4294967296"
@@ -135,24 +160,32 @@ services:
       ELASTIC: "true"
       NODE_IP_ADDR: "0.0.0.0"
       PEERS: ""
-    ports:
-      - "25000:25000"
+        #ports:
+      #- "27000:27000"
     volumes:
       - mictlanx-peer-0:/app/mictlanx
     networks:
       - mictlanx
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "8G"
+      placement:
+        constraints: 
+          - "node.labels.index==10"
 
-  mictlanx-peer-1:
-    container_name: mictlanx-peer-1
+
+  mictlanx-peer-1xx:
     image: "nachocode/mictlanx:peer-0.0.160-alpha.1"
-    hostname: mictlanx-peer-1
+    hostname: mictlanx-peer-1xx
     environment:
       USER_ID: "6666"
       GROUP_ID: "6666"
       BIN_NAME: "peer"
-      NODE_ID: "mictlanx-peer-1"
-      NODE_PORT: "25001"
-      IP_ADDRESS: "mictlanx-peer-1"
+      NODE_ID: "mictlanx-peer-1xx"
+      NODE_PORT: "27001"
+      IP_ADDRESS: "mictlanx-peer-1xx"
       SERVER_IP_ADDR: "0.0.0.0"
       NODE_DISK_CAPACITY: "100000000000"
       NODE_MEMORY_CAPACITY: "4294967296"
@@ -166,25 +199,32 @@ services:
       ELASTIC: "true"
       NODE_IP_ADDR: "0.0.0.0"
       PEERS: ""
-    ports:
-      - "25001:25001"
+        #ports:
+      #- "27001:27001"
     volumes:
       - mictlanx-peer-1:/app/mictlanx
     networks:
       - mictlanx
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "8G"
+      placement:
+        constraints: 
+          - "node.labels.index==11"
 
 
-  mictlanx-peer-2:
-    container_name: mictlanx-peer-2
+  mictlanx-peer-2xx:
     image: "nachocode/mictlanx:peer-0.0.160-alpha.1"
-    hostname: mictlanx-peer-2
+    hostname: mictlanx-peer-2xx
     environment:
       USER_ID: "6666"
       GROUP_ID: "6666"
       BIN_NAME: "peer"
-      NODE_ID: "mictlanx-peer-2"
-      NODE_PORT: "25002"
-      IP_ADDRESS: "mictlanx-peer-2"
+      NODE_ID: "mictlanx-peer-2xx"
+      NODE_PORT: "27002"
+      IP_ADDRESS: "mictlanx-peer-2xx"
       SERVER_IP_ADDR: "0.0.0.0"
       NODE_DISK_CAPACITY: "100000000000"
       NODE_MEMORY_CAPACITY: "4294967296"
@@ -198,12 +238,57 @@ services:
       ELASTIC: "true"
       NODE_IP_ADDR: "0.0.0.0"
       PEERS: ""
-    ports:
-      - "25002:25002"
+        # ports:
+      #- "27002:27002"
     volumes:
       - mictlanx-peer-2:/app/mictlanx
     networks:
       - mictlanx
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "8G"
+      placement:
+        constraints: 
+          - "node.labels.index==12"
+          
+  mictlanx-summoner-0xx:
+    image: nachocode/mictlanx:summoner
+    container_name: mictlanx-summoner-0
+    hostname: mictlanx-summoner-0
+    privileged: true
+    #ports:
+      #- 15000:15000
+    environment:
+      - USER_ID=6666
+      - GROUP_ID=6666
+      - DOCKER_GID=998
+      - BASE_PATH=${BASE_PATH-/app/mictlanx}
+      - BIN_NAME=summoner
+      - NODE_ID=mictlanx-summoner-0
+      - NODE_PORT=15000
+      - IP_ADDRESS=mictlanx-summoner-0
+      - SERVER_IP_ADDR=0.0.0.0
+      - LOG_PATH=${BASE_PATH-/app/mictlanx}/log
+      - LOCAL_PATH=${BASE_PATH-/app/mictlanx}/local
+      - DATA_PATH=${BASE_PATH-/app/mictlanx}/data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - mictlanx-summoner-0:/mictlanx
+    networks:
+      - mictlanx
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: "8G"
+      placement:
+        constraints: 
+          - "node.labels.index==12"
+
+
 
 volumes:
   mictlanx-router-0_logs:
@@ -214,4 +299,6 @@ volumes:
 
 networks:
   mictlanx:
+    external: true
+  traefik-pub:
     external: true

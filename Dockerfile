@@ -1,12 +1,12 @@
 # 
-FROM python:3.9
+FROM python:3.10
 
 # 
 WORKDIR /app
 
 # 
 COPY ./requirements.txt /app/requirements.txt
-RUN pip install -r /app/requirements.txt
+RUN pip install --extra-index-url https://test.pypi.org/simple  -r /app/requirements.txt
 #
 COPY ./pyproject.toml /app
 COPY ./mictlanxrouter /app/mictlanxrouter

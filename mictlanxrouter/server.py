@@ -226,12 +226,13 @@ async def lifespan(app:FastAPI):
 peers_controller           = Cx.PeersController(log = log, tracer=tracer, network_id=MICTLANX_ROUTER_NETWORK_ID, max_peers_rf=MICTLANX_ROUTER_MAX_PEERS_RF)
 # data_replicator_controller = Cx.DataReplicatorController(log =log, cator)
 # tasks_controller           = Cx.TasksController(log = log, tm =tm)
-buckets_controller         = Cx.BucketsController(log = log, tracer= tracer,cache = cache)
+buckets_controller         = Cx.BucketsController(log = log,cache = cache)
 cache_controller = Cx.CacheControllers(log = log, cache =cache)
 
 app = FastAPI(
     root_path=os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"),
     lifespan=lifespan
+    
 )
 # Open telemetry
 FastAPIInstrumentor.instrument_app(app)
@@ -278,4 +279,4 @@ app.include_router(cache_controller.router)
 
 
 
-Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+# Instrumentator().instrument(app).expose(app, endpoint="/metrics")

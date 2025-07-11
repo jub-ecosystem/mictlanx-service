@@ -6,10 +6,9 @@ authors = ["Ignacio Castillo <ignacio.bcastillo@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<4"
+python = ">=3.10,<4"
 option = "^2.1.0"
 nanoid = "^2.0.0"
-pydantic = "^2.7.1"
 fastapi = "^0.111.0"
 python-multipart = "^0.0.9"
 aiorwlock = "^1.4.0"
@@ -29,7 +28,10 @@ prometheus-fastapi-instrumentator = "^7.0.0"
 hypercorn = "^0.17.3"
 aiofiles = "^24.1.0"
 lmdb = "^1.6.2"
-mictlanxrm = "0.0.161a6"
+mictlanxrm = "0.0.161a33"
+gunicorn = "^23.0.0"
+tenacity = "^9.1.2"
+pydantic = "^2.11.7"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
 more-itertools = "^10.2.0"

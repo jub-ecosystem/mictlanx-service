@@ -353,8 +353,11 @@ class LRUSharedMemoryCache(CacheX):
                 shm.close()
                 shm.unlink()
                 log.debug({"event":"REMOVE", "key":key,"response_time":T.time() - t1})
-            except FileNotFoundError:
-                pass
+            except FileNotFoundError as e:
+                log.error({"error":"File not found error","raw":str(e)})
+            except Exception as e:
+                raise e
+                
 
     def clear(self):
         keys = list(self.__cache.keys())
