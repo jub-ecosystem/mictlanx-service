@@ -118,12 +118,9 @@ MICTLANX_ROUTER_MAX_PEERS_RF             = int(os.environ.get("MICTLANX_ROUTER_M
 MICTLANX_ROUTER_NETWORK_ID               = os.environ.get("MICTLANX_ROUTER_NETWORK_ID","mictlanx")
 # Replicator
 # Client
-# MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:25000 mictlanx-peer-1:localhost:25001 mictlanx-peer-2:localhost:25002")
 MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:24000 mictlanx-peer-1:localhost:24001")
 MICTLANX_PROTOCOL    = os.environ.get("MICTLANX_PROCOTOL","http")
-# MICTLANX_PEERS       = [] if MICTLANX_PEERS_STR == "" else list(Utils.peers_from_str_v2(peers_str=MICTLANX_PEERS_STR,separator=" ", protocol=MICTLANX_PROTOCOL,) )
 MICTLANX_PEERS = Utils.async_peers_from_str(peers_str=MICTLANX_PEERS_STR, protocol=MICTLANX_PROTOCOL) if MICTLANX_PEERS_STR != "" else []
-# list(map(lambda x:AsyncPeer(peer_id=x.peer_id, ip_addr=x.ip_addr, port=x.port, protocol=x.protocol) , MICTLANX_PEERS))
 MICTLANX_API_VERSION = os.environ.get("MICTLANX_API_VERSION","4")
 MICTLANX_TIMEOUT     = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
 # Summoner
