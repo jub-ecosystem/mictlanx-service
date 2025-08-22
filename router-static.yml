@@ -1,7 +1,7 @@
 services:
   
   mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.0.161a17
+    image: nachocode/mictlanx:router-0.0.161a20
     container_name: mictlanx-router-0
     environment:
       - MICTLANX_DAEMON_HOSTNAME=mictlanx-rm

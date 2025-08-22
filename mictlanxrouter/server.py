@@ -3,17 +3,13 @@ import sys
 import requests as R
 import time as T
 import humanfriendly as HF
-import aiorwlock
 import signal
-from asyncio.queues import Queue
-import asyncio
 from fastapi import FastAPI
 #
 from contextlib import asynccontextmanager
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from option import Some
-# from fastapi.middleware.gzip import GZipMiddleware
 from ipaddress import IPv4Network
 # 
 import mictlanxrouter.caching as ChX
@@ -27,12 +23,8 @@ from mictlanxrouter.opentelemetry import NoOpSpanExporter
 # Opentelemetry
 # ===========================================================
 # Prometheus
-from prometheus_fastapi_instrumentator import Instrumentator
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry import trace
-
-
-# from opentelemetry.span
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -49,9 +41,9 @@ MICTLANX_CACHE_EVICTION_POLICY  = os.environ.get("MICTLANX_CACHE_EVITION_POLICY"
 MICTLANX_CACHE_CAPACITY         = int(os.environ.get("MICTLANX_CACHE_CAPACITY","100"))
 MICTLANX_CACHE_CAPACITY_STORAGE = HF.parse_size(os.environ.get("MICTLANX_CACHE_CAPACITY_STORAGE","1GB"))
 
-MICTLANX_ROUTER_SERVICE_NAME = os.environ.get("MICTLANX_ROUTER_SERVICE_NAME","mictlanx-router")
-MICTLANX_JAEGER_ENDPOINT     = os.environ.get("MICTLANX_JAEGER_ENDPOINT","http://localhost:4318")
-MICTLANX_ZIPKIN_ENDPOINT     = os.environ.get("MICTLANX_ZIPKIN_ENDPOINT","http://localhost:9411")
+MICTLANX_ROUTER_SERVICE_NAME  = os.environ.get("MICTLANX_ROUTER_SERVICE_NAME","mictlanx-router")
+MICTLANX_JAEGER_ENDPOINT      = os.environ.get("MICTLANX_JAEGER_ENDPOINT","http://localhost:4318")
+MICTLANX_ZIPKIN_ENDPOINT      = os.environ.get("MICTLANX_ZIPKIN_ENDPOINT","http://localhost:9411")
 MICTLANX_ROUTER_OPENTELEMETRY = bool(int(os.environ.get("MICTLANX_ROUTER_OPENTELEMTRY",0)))
 
 if MICTLANX_CACHE:
@@ -63,11 +55,15 @@ if MICTLANX_CACHE:
 else:
     cache = ChX.NoCache()
 
+
+
 resource = Resource(
     attributes={
         SERVICE_NAME: MICTLANX_ROUTER_SERVICE_NAME
     }
 )
+
+
 trace_provider = TracerProvider(resource=resource)
 trace.set_tracer_provider(trace_provider)
 tracer = trace.get_tracer(MICTLANX_ROUTER_SERVICE_NAME)
@@ -120,12 +116,7 @@ MICTLANX_ROUTER_MAX_TASKS                = int(os.environ.get("MICTLANX_ROUTER_M
 MICTLANX_ROUTER_MAX_CONCURRENCY          = int(os.environ.get("MICTLANX_ROUTER_MAX_CONCURRENCY","5"))
 MICTLANX_ROUTER_MAX_PEERS_RF             = int(os.environ.get("MICTLANX_ROUTER_MAX_PEERS_RF","5"))
 MICTLANX_ROUTER_NETWORK_ID               = os.environ.get("MICTLANX_ROUTER_NETWORK_ID","mictlanx")
-# Storage peer manager
-# Replica manager
-
 # Replicator
-MICTLANX_DATA_REPLICATOR_QUEUE_HEARTBEAT  = os.environ.get("MICTLANX_REPLICATOR_QUEUE_HEARTBEAT","1min")
-MICTLANX_DATA_REPLICATOR_MAX_IDLE_TIMEOUT = os.environ.get("MICTLANX_DATA_REPLICATOR_MAX_IDLE_TIMEOUT","1hr")
 # Client
 # MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:25000 mictlanx-peer-1:localhost:25001 mictlanx-peer-2:localhost:25002")
 MICTLANX_PEERS_STR   = os.environ.get("MICTLANX_PEERS","mictlanx-peer-0:localhost:24000 mictlanx-peer-1:localhost:24001")
