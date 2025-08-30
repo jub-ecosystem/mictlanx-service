@@ -1,6 +1,4 @@
 from mictlanxrouter.controllers.peers import PeersController
-from mictlanxrouter.controllers.data_replicator import DataReplicatorController
 from mictlanxrouter.controllers.tasks import TasksController
-from mictlanxrouter.controllers.replica_manager import ReplicaManagerController
 from mictlanxrouter.controllers.buckets import BucketsController
-from mictlanxrouter.controllers.cache import CacheControllers
+from mictlanxrouter.controllers.cache import CacheController

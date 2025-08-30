@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from mictlanx.logger.log import Log
 from mictlanxrouter.caching import CacheX
-class CacheControllers:
+class CacheController:
     def __init__(self,log:Log, cache:CacheX):
         self.router = APIRouter()
         self.log=log

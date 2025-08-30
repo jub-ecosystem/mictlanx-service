@@ -1,21 +1,22 @@
+
+import os
+from typing import List,Dict
+import time as T
+import requests as R
+# 
 from fastapi.routing import APIRouter
-from fastapi import HTTPException,Response,Request,Depends
-from mictlanxrouter.dto.index import PeerPayload
+from fastapi import HTTPException,Response,Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from mictlanxrouter.peer_manager.healer import StoragePeerManager
-import os
 from option import Result,Ok,Err
-import asyncio
-import requests as R
-from typing import List
-import time as T
-from mictlanx.logger.log import Log
-from opentelemetry.trace import Tracer
-from mictlanxrouter.dto.index import PeerElasticPayload
-from mictlanx.v4.interfaces.index import AsyncPeer
-from mictlanxrm.client import SPMClient
+from opentelemetry.trace import Tracer,Status,StatusCode
+# 
+from mictlanxrouter.dto.index import PeerPayload
 import mictlanxrm.models as MX
+# 
+from mictlanx.interfaces import PeerStatsResponse
+from mictlanx.logger.log import Log
+from mictlanxrm.client import SPMClient
 
 class PeersController():
     def __init__(self, 
@@ -51,8 +52,8 @@ class PeersController():
     async def fx(self,peer_payload:PeerPayload)->Result[str,Exception]:
         # async with peer_healer_rwlock.writer_lock:
         try:
-            _p  = peer_payload.to_v4peer()
-            peer = AsyncPeer(peer_id=_p.peer_id, ip_addr=_p.ip_addr,port=_p.port,protocol=_p.protocol)
+            peer  = peer_payload.to_peer()
+            # peer = AsyncPeer(peer_id=_p.peer_id, ip_addr=_p.ip_addr,port=_p.port,protocol=_p.protocol)
             status = await self.storage_peer_manager.add_peer(peer)
             self.log.debug({
                 "event":"PEER.ADDED",
@@ -80,7 +81,7 @@ class PeersController():
                 start_time = T.time()
                 res = await spm_client.add_peers(
                     params = MX.AddPeersParams(
-                        peers =  [MX.PeerModel(**p.to_v4peer().__dict__) for p in peers]
+                        peers =  [MX.PeerModel(**p.to_peer().to_dict()) for p in peers]
                     )
                 )
                 # peers_ids  = list(map(lambda p: p.peer_id, peers))
@@ -137,12 +138,10 @@ class PeersController():
                 start_time = T.time()
                 res = await spm_client.add_peers(
                     params = MX.AddPeersParams(
-                        peers =  [MX.PeerModel(**peer.to_v4peer().__dict__)]
+                        peers =  [MX.PeerModel(**peer.to_peer().to_dict())]
                     )
                 )
-                # asyncio.gather(
-                #     self.fx(peer_payload=peer)
-                # )
+         
                 self.log.info({
                     "event":"PEER.ADDED",
                     "peer_id":peer.peer_id,
@@ -261,43 +260,54 @@ class PeersController():
 
  
         # > ======================= Peers ============================
-        @self.router.get("/peers/stats")
+        @self.router.get(
+                "/peers/stats",
+                response_model = Dict[str,PeerStatsResponse],
+                summary        = "Get statistics of peers",
+                description    = "Returns the basic information and ball distribution in the peers"
+        )
+        
         async def get_peers_stats(
             start:int =0 ,
             end:int = 100,
             spm_client:SPMClient = Depends(self.get_spm_client)
         ):
-            
-            try:
-                with self.tracer.start_as_current_span("peers.stats") as span:
-                    # responses = []
+            with self.tracer.start_as_current_span("peer.stats") as span:
+                span.set_attribute("peer.stats.start", start)
+                span.set_attribute("peer.stats.end", end)
+                try:
                     t1 = T.time()
                     res = await spm_client.get_stats(skip= start, end=end)
                     if res.is_err:
+                        e = res.unwrap_err()
                         self.log.error({
-                            "detail":str(res.unwrap_err())
+                            "detail":str(e)
                         })
-                        return {
-                        }
+                        span.record_exception(e)
+                        span.set_status(Status(StatusCode.ERROR, description=str(e)))
+                        raise HTTPException(status_code=500, detail=str(e))
+                    
+
                     _res = res.unwrap()
                     self.log.info({
                         "event":"PEER.STATS",
                         "peer_ids":list(_res.keys()),
                         "response_time":T.time()-t1
                     })
+                    span.add_event(name="peers.stats.completed", attributes={"peers.count": len(_res.keys())})
                     return JSONResponse(
                         jsonable_encoder(_res)
                     )
-            except R.exceptions.HTTPError as e:
-                detail = str(e.response.content.decode("utf-8") )
-                # e.response.reason
-                status_code = e.response.status_code
-                self.log.error({
-                    "detail":detail,
-                    "status_code":status_code,
-                    "reason":e.response.reason,
-                })
-                raise HTTPException(status_code=status_code, detail=detail  )
+                except R.exceptions.HTTPError as e:
+                    detail = str(e.response.content.decode("utf-8") )
+                    # e.response.reason
+                    status_code = e.response.status_code
+                    self.log.error({
+                        "detail":detail,
+                        "status_code":status_code,
+                        "reason":e.response.reason,
+                    })
+                    raise HTTPException(status_code=status_code, detail=detail  )
     
  
 

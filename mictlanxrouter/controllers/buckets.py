@@ -23,14 +23,14 @@ from nanoid import generate as nanoid
 # 
 from mictlanx.logger.log import Log
 from mictlanx.utils import Utils as MictlanXUtils
-import mictlanx.v4.interfaces as InterfaceX
+import mictlanx.interfaces as InterfaceX
 # 
 from mictlanxrm.client import SPMClient
 from mictlanxrm.models import TaskX
 # 
 from mictlanxrouter.dto import Operations,DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.caching import CacheX
-from mictlanxrouter.dto.metadata import Metadata
+from mictlanxrouter.dto.metadata import MetadataDTO
 from mictlanxrouter.helpers.utils import Utils
 from mictlanxrouter.decorators import disconnect_protected
 from tenacity import retry, stop_after_attempt, wait_fixed, RetryError
@@ -166,7 +166,12 @@ class BucketsController():
                     gap_timestamp = T.time_ns()
                     peers_result         = await spm_client.get_peers()
                     if peers_result.is_err:
-                        raise HTTPException(detail=str(peers_result.unwrap_err()), status=500)
+                        e = peers_result.unwrap_err()
+                        self.log.error({
+                            "detail":str(e)
+                        })
+                        raise HTTPException(detail=str(e), status=500)
+                    
                     peers = [ p.to_async_peer() for p in peers_result.unwrap().available]
 
 
@@ -175,7 +180,7 @@ class BucketsController():
                         "peers_ids":[],
                         "balls":[]
                     }
-                    current_balls:Dict[str,Tuple[int, Metadata]] = {}
+                    current_balls:Dict[str,Tuple[int, MetadataDTO]] = {}
 
                     for peer in peers:
                         timestamp = T.time_ns()
@@ -188,7 +193,9 @@ class BucketsController():
                         for ball in metadata.balls:
                             if ball.size ==0:
                                 continue
+
                             updated_at = int(ball.tags.get("updated_at","-1"))
+                            
                             if not ball.key in current_balls :
                                 current_balls.setdefault(ball.key, (updated_at,ball))
                                 continue
@@ -312,7 +319,7 @@ class BucketsController():
         async def update_metadata(
             bucket_id:str,
             key:str,
-            metadata:Metadata, 
+            metadata:MetadataDTO, 
             spm_client:SPMClient = Depends(self.get_spm_client)
         ):
             current_replicas_result = await spm_client.get_replicas(bucket_id=bucket_id, key= key)
@@ -347,7 +354,7 @@ class BucketsController():
         @self.router.post("/api/v4/buckets/{bucket_id}/metadata")
         async def put_metadata(
             bucket_id:str,
-            metadata:Metadata, 
+            metadata:MetadataDTO, 
             update:Annotated[Union[str,None], Header()] = "0",
             spm_client:SPMClient = Depends(self.get_spm_client)
 
@@ -357,6 +364,8 @@ class BucketsController():
                 bucket_id       = MictlanXUtils.sanitize_str(x = bucket_id)
                 group_id        = nanoid()
                 get_replicas_result = await spm_client.get_replicas(bucket_id=bucket_id, key=key)
+
+
                 if get_replicas_result.is_err:
                     detail= "No available peers."
                     self.log.error({
@@ -392,9 +401,6 @@ class BucketsController():
                     replicas_result               = await spm_client.put(
                         bucket_id=bucket_id, key=key, size=metadata.size
                     )
-                    # print("*"*20)
-                    # print("REPLICAS_+ReSLT", replicas_result)
-                    # print("*"*20)
                     if replicas_result.is_err:
                         detail= "Put remote metadata failed"
                         self.log.error({
@@ -499,7 +505,7 @@ class BucketsController():
                 get_task_timestamp = T.time_ns()
                 maybe_peer         = await spm_client.get_peer_by_id(peer_id=peer_id)
                 if maybe_peer.is_err:
-                    raise HTTPException(status_code=404, detail="Peer({}) is not available.".format(peer_id))
+                    raise HTTPException(status_code=404, detail=f"Peer({peer_id}) is not available." )
                 # else:
                 peer = maybe_peer.unwrap()
 
@@ -965,7 +971,6 @@ class BucketsController():
             content_type:str = "",
             chunk_size:Annotated[Union[str,None], Header()]="10mb",
             peer_id:Annotated[Union[str,None], Header()]=None,
-            # local_peer_id:Annotated[Union[str,None], Header()]=None,
             filename:str = "",
             attachment:bool = False,
             force_get:Annotated[Union[int,None], Header()] = 1,
@@ -1283,7 +1288,7 @@ class BucketsController():
                 peers_response = peers_result.unwrap()
                 peers = list(map(lambda x:x.to_async_peer(),peers_response.available))
 
-                responses:List[Metadata] = []
+                responses:List[MetadataDTO] = []
                 tmp_keys = []
                 size= 0
                 for peer in peers:
@@ -1471,7 +1476,7 @@ class BucketsController():
                     default_del_by_ball_id_response = DeletedByBallIdResponse(n_deletes=0, ball_id=_ball_id)
                     for peer in  peers:
                         start_time = T.time()
-                        chunks_metadata_result:Result[Iterator[Metadata],Exception] = await peer.get_chunks_metadata(
+                        chunks_metadata_result:Result[Iterator[MetadataDTO],Exception] = await peer.get_chunks_metadata(
                             key=_ball_id,
                             bucket_id=_bucket_id,
                             headers=headers
