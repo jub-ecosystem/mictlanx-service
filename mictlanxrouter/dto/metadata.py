@@ -1,7 +1,7 @@
 from typing import Dict,Optional
 from pydantic import BaseModel
 
-class MetadataDTO(BaseModel):
+class PutMetadataDTO(BaseModel):
     bucket_id:str
     key:str
     ball_id:str

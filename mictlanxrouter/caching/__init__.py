@@ -215,80 +215,90 @@ class LRUSharedMemoryCache(CacheX):
 
     def put(self, key: str, value: bytes) -> int:
         """
-        Store the given bytes value in a shared memory block.
-        If the key already exists, the previous entry is removed.
-        Returns 0 on success, -1 on failure.
+        Store bytes in shared memory under 'key'.
+        If key exists, old entry is removed first.
+        Evicts least recently used items if needed.
+        Returns 0 on success, -1 on failure (never raises).
         """
+        t0 = T.time()
         try:
-            t1 = T.time()
             size = len(value)
-            current_used_capacity = self.used_capacity + size
-            can_store = current_used_capacity <= self.capacity_storage
-            exists_in_fs = self.shared_memory_exists(name=key)
-            if exists_in_fs:
-                self.remove(key=key)
+            if size <= 0:
+                log.error({"event": "PUT.FAILED", "key": key, "reason": "zero-size"})
+                return -1
 
-            exists_in_local = key in self.__cache
-
-            log.debug({
-                "event":"PUT",
-                "key":key,
-                "size":size,
-                "used_capacity": HF.format_size(self.used_capacity),
-                "available_capacity":HF.format_size(self.get_total_storage_capacity() - self.get_used_storage_capacity()),
-                "total_capacity":HF.format_size(self.capacity_storage),
-                "uf":self.get_uf(),
-                "current_used_capacity": HF.format_size(current_used_capacity),
-                "exists_fs":exists_in_fs,
-                "can_store":can_store, 
-                "exists_local":exists_in_local,
-            })
-            if exists_in_local:
-                self.__cache.move_to_end(key)
-                old_shm_name, _ = self.__cache[key]
+            # track old size if exists
+            old_size = 0
+            if key in self.__cache:
+                old_name, old_size = self.__cache[key]
                 try:
-                    old_shm = shared_memory.SharedMemory(name=old_shm_name)
-                    old_shm.close()
-                    old_shm.unlink()
+                    shm_old = shared_memory.SharedMemory(name=old_name)
+                    shm_old.close(); shm_old.unlink()
                 except FileNotFoundError:
                     pass
+                self.used_capacity -= old_size
+                del self.__cache[key]
 
-            
-            # If there's not enough storage, remove least recently used items.
-            elif not can_store:
-                # Remove items until we can store the new value.
-                while_pred = self.used_capacity + size > self.capacity_storage
-                while while_pred:
-                    oldest_key, (old_shm_name, old_size) = self.__cache.popitem(last=False)
-                    try:
-                        old_shm = shared_memory.SharedMemory(name=old_shm_name)
-                        old_shm.close()
-                        old_shm.unlink()
-                    except FileNotFoundError:
-                        pass
-                    self.used_capacity -= old_size
+            # evict until it fits
+            evicted_bytes = 0
+            evicted_items = 0
+            while self.used_capacity + size > self.capacity_storage and self.__cache:
+                victim_key, (victim_name, victim_size) = self.__cache.popitem(last=False)
+                try:
+                    shm_v = shared_memory.SharedMemory(name=victim_name)
+                    shm_v.close(); shm_v.unlink()
+                except FileNotFoundError:
+                    pass
+                self.used_capacity -= victim_size
+                evicted_bytes += victim_size
+                evicted_items += 1
 
-            # Create new shared memory block.
-            shm = shared_memory.SharedMemory(name=key,create=True, size=size)
-            shm.buf[:size] = value
+            # still too big?
+            if self.used_capacity + size > self.capacity_storage:
+                log.error({
+                    "event": "PUT.FAILED",
+                    "key": key,
+                    "size": size,
+                    "capacity": self.capacity_storage,
+                    "reason": "item too large",
+                    "used_capacity": self.used_capacity,
+                })
+                return -1
+
+            # create and write
+            shm = shared_memory.SharedMemory(name=key, create=True, size=size)
+            try:
+                shm.buf[:size] = value
+            finally:
+                shm.close()
+
+            # update index + accounting
             self.__cache[key] = (shm.name, size)
             self.used_capacity += size
-            # Close our local reference; other processes can open it by name.
-            shm.close()
+
             log.info({
-                "event":"PUT",
-                "key":key,
-                "size":size,
-                "response_time":T.time() -t1
+                "event": "PUT",
+                "key": key,
+                "size": size,
+                "old_size": old_size,
+                "delta_used": size - old_size,
+                "used_capacity": HF.format_size(self.used_capacity),
+                "available_capacity": HF.format_size(self.capacity_storage - self.used_capacity),
+                "evicted_items": evicted_items,
+                "evicted_bytes": evicted_bytes,
+                "response_time": T.time() - t0,
             })
             return 0
+
         except Exception as e:
             log.error({
-                "event":"PUT.FAILED",
-                "error":str(e), 
+                "event": "PUT.FAILED",
+                "key": key,
+                "error": str(e),
+                "used_capacity": self.used_capacity,
             })
-            # print(e)
             return -1
+
 
     def get(self, key: str):
         """

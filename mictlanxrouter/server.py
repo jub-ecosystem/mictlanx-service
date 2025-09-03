@@ -2,6 +2,7 @@ import os
 import sys
 import signal
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 # 
 import humanfriendly as HF
 from fastapi import FastAPI
@@ -16,7 +17,7 @@ from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter
 )
-from opentelemetry.exporter.zipkin.json import ZipkinExporter
+from prometheus_fastapi_instrumentator import Instrumentator
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -28,6 +29,10 @@ from mictlanxrouter.opentelemetry import NoOpSpanExporter
 from mictlanx.logger.log import Log
 from mictlanx.services import  Summoner
 from mictlanx.utils.uri import MictlanXURI
+
+ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH",".env.local")
+if os.path.exists(ENV_FILE_PATH):
+    load_dotenv(ENV_FILE_PATH)
 
 
 
@@ -174,8 +179,8 @@ async def lifespan(app:FastAPI):
     yield
 
 peers_controller   = Cx.PeersController(log = log, tracer=tracer, network_id=MICTLANX_ROUTER_NETWORK_ID, max_peers_rf=MICTLANX_ROUTER_MAX_PEERS_RF)
-buckets_controller = Cx.BucketsController(log = log,cache = cache)
-cache_controller   = Cx.CacheController(log = log, cache =cache)
+buckets_controller = Cx.BucketsController(log = log,tracer=tracer,cache = cache)
+cache_controller   = Cx.CacheController(log = log, cache =cache,tracer=tracer)
 
 app = FastAPI(
     root_path = os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"),
@@ -184,6 +189,7 @@ app = FastAPI(
 )
 # Open telemetry
 FastAPIInstrumentor.instrument_app(app)
+Instrumentator().instrument(app).expose(app)
 
 MICTLANX_CORS_ALLOW_ORIGINS     = os.environ.get("MICTLANX_CORS_ALLOW_ORIGINS","*")
 MICTLANX_CORS_ALLOW_CREDENTILAS = bool(int(os.environ.get("MICTLANX_CORS_ALLOW_CREDENTILAS","1")))
