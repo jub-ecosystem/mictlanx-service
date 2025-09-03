@@ -40,8 +40,8 @@ wsproto==1.2.0
 gunicorn 
 tenacity
 --extra-index-url https://test.pypi.org/simple
-mictlanxrm==0.0.161a33
+mictlanxrm==0.1.0a0
 --extra-index-url https://test.pypi.org/simple
-mictlanx ==0.0.161a34
+mictlanx ==0.1.0a0
 --extra-index-url https://test.pypi.org/simple
 xolo==0.0.9a8
