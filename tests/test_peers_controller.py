@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from mictlanxrouter.server import app
-from mictlanxrouter.dto import MetadataDTO
+from mictlanxrouter.dto import PutMetadataDTO
 from mictlanx.interfaces import PutMetadataResponse
 from xolo.utils.utils import Utils as XoloUtils
 import io
@@ -21,7 +21,7 @@ def test_put():
     content_type       = "application/octet-stream"
 
 
-    json =MetadataDTO(
+    json =PutMetadataDTO(
         bucket_id          = bucket_id,
         ball_id            = ball_id,
         key                = key,
