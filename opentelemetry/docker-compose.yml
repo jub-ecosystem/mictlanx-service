@@ -17,15 +17,6 @@ services:
       - LOG_LEVEL=debug
     networks:
       - mictlanx
-  zipkin:
-    image: openzipkin/zipkin
-    ports:
-      - "9411:9411"
-    environment:
-      - JAVA_OPTS=-Xmx2g -Xms2g
-    restart: unless-stopped
-    networks:
-      - mictlanx
   prometheus:
     image: prom/prometheus
     volumes:

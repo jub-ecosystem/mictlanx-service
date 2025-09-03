@@ -7,12 +7,11 @@ import requests  as R
 import aiofiles
 
 # 
-from option import Result,Ok,Err
+from option import Result
 # 
 import httpx
 # 
 import tempfile
-# from opentelemetry.trace import Span,Status,StatusCode,Tracer
 # 
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -23,18 +22,21 @@ from nanoid import generate as nanoid
 # 
 from mictlanx.logger.log import Log
 from mictlanx.utils import Utils as MictlanXUtils
-import mictlanx.v4.interfaces as InterfaceX
+import mictlanx.interfaces as InterfaceX
 # 
 from mictlanxrm.client import SPMClient
 from mictlanxrm.models import TaskX
 # 
 from mictlanxrouter.dto import Operations,DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.caching import CacheX
-from mictlanxrouter.dto.metadata import Metadata
+from mictlanxrouter.dto.metadata import PutMetadataDTO
 from mictlanxrouter.helpers.utils import Utils
 from mictlanxrouter.decorators import disconnect_protected
 from tenacity import retry, stop_after_attempt, wait_fixed, RetryError
 from contextlib import contextmanager
+# 
+from opentelemetry.trace import Tracer,Status,StatusCode
+
 
 class DependencyContainer:
     def __init__(self, log:Log):
@@ -81,7 +83,8 @@ class BucketsController():
     def __init__(self,
                  log:Log,
                  cache:CacheX,
-                 max_timeout:str= "10s"
+                tracer:Tracer,
+                 max_timeout:str= "10s", 
     ):
         self.log                  = log
         self.router               = APIRouter()
@@ -166,7 +169,12 @@ class BucketsController():
                     gap_timestamp = T.time_ns()
                     peers_result         = await spm_client.get_peers()
                     if peers_result.is_err:
-                        raise HTTPException(detail=str(peers_result.unwrap_err()), status=500)
+                        e = peers_result.unwrap_err()
+                        self.log.error({
+                            "detail":str(e)
+                        })
+                        raise HTTPException(detail=str(e), status=500)
+                    
                     peers = [ p.to_async_peer() for p in peers_result.unwrap().available]
 
 
@@ -175,7 +183,7 @@ class BucketsController():
                         "peers_ids":[],
                         "balls":[]
                     }
-                    current_balls:Dict[str,Tuple[int, Metadata]] = {}
+                    current_balls:Dict[str,Tuple[int, PutMetadataDTO]] = {}
 
                     for peer in peers:
                         timestamp = T.time_ns()
@@ -188,7 +196,9 @@ class BucketsController():
                         for ball in metadata.balls:
                             if ball.size ==0:
                                 continue
+
                             updated_at = int(ball.tags.get("updated_at","-1"))
+                            
                             if not ball.key in current_balls :
                                 current_balls.setdefault(ball.key, (updated_at,ball))
                                 continue
@@ -312,7 +322,7 @@ class BucketsController():
         async def update_metadata(
             bucket_id:str,
             key:str,
-            metadata:Metadata, 
+            metadata:PutMetadataDTO, 
             spm_client:SPMClient = Depends(self.get_spm_client)
         ):
             current_replicas_result = await spm_client.get_replicas(bucket_id=bucket_id, key= key)
@@ -347,16 +357,19 @@ class BucketsController():
         @self.router.post("/api/v4/buckets/{bucket_id}/metadata")
         async def put_metadata(
             bucket_id:str,
-            metadata:Metadata, 
+            metadata:PutMetadataDTO, 
             update:Annotated[Union[str,None], Header()] = "0",
             spm_client:SPMClient = Depends(self.get_spm_client)
 
         ):
+                # with self
                 arrival_time   = T.time()
                 key             = MictlanXUtils.sanitize_str(x = metadata.key)
                 bucket_id       = MictlanXUtils.sanitize_str(x = bucket_id)
                 group_id        = nanoid()
                 get_replicas_result = await spm_client.get_replicas(bucket_id=bucket_id, key=key)
+
+
                 if get_replicas_result.is_err:
                     detail= "No available peers."
                     self.log.error({
@@ -384,17 +397,24 @@ class BucketsController():
                     raise HTTPException(status_code=404, detail=detail ,headers={} )
 
 
-                headers        = {"Update":update}
+                headers        = {"Update":update,"Task-Id":group_id}
                 if not bucket_id == metadata.bucket_id:
-                    raise HTTPException(status_code=400, detail="Bucket ID mismatch: {} != {}".format(bucket_id, metadata.bucket_id))
+                    detail = "Bucket ID mismatch: {} != {}".format(bucket_id, metadata.bucket_id)
+                    self.log.error({
+                        "event"             : "BUCKET_ID.MISMATCH",
+                        "bucket_id"         : bucket_id,
+                        "metadata.bucket_id": metadata.bucket_id,
+                        "detail"            : detail
+                    })
+                    raise HTTPException(status_code=400, detail= detail ) 
 
                 try: 
-                    replicas_result               = await spm_client.put(
-                        bucket_id=bucket_id, key=key, size=metadata.size
+                    replicas_result               = await spm_client.put_rf(
+                        bucket_id = bucket_id,
+                        key       = key,
+                        size      = metadata.size,
+                        rf        = metadata.replication_factor
                     )
-                    # print("*"*20)
-                    # print("REPLICAS_+ReSLT", replicas_result)
-                    # print("*"*20)
                     if replicas_result.is_err:
                         detail= "Put remote metadata failed"
                         self.log.error({
@@ -405,40 +425,56 @@ class BucketsController():
                             "available_peers":[]
                         })
                         raise HTTPException(status_code=404, detail=detail ,headers={} )
-
-                    replica = replicas_result.unwrap()
-
-                    inner_start_time = T.time()
-                    put_metadata_result = await replica.put_metadata(
-                        bucket_id=metadata.bucket_id,
-                        key=metadata.key,
-                        ball_id=metadata.ball_id,
-                        size= metadata.size,
-                        checksum=metadata.checksum,
-                        producer_id=metadata.producer_id,
-                        content_type=metadata.content_type,
-                        tags=metadata.tags,
-                        is_disable=metadata.is_disabled,
-                        headers=headers
-                    )
-                    if put_metadata_result.is_err:
-                        raise put_metadata_result.unwrap_err()
                     
+                    replicas = replicas_result.unwrap()
+                    tasks_ids = []
+                    peers_ids = []
 
-                    put_metadata_response = put_metadata_result.unwrap()
+                    for replica in replicas:
+
+                        inner_start_time = T.time()
+                        put_metadata_result = await replica.put_metadata(
+                            bucket_id    = metadata.bucket_id,
+                            key          = metadata.key,
+                            ball_id      = metadata.ball_id,
+                            size         = metadata.size,
+                            checksum     = metadata.checksum,
+                            producer_id  = metadata.producer_id,
+                            content_type = metadata.content_type,
+                            tags         = metadata.tags,
+                            is_disable   = metadata.is_disabled,
+                            headers      = headers
+                        )
+                        if put_metadata_result.is_err:
+                            self.log.error({
+                                "error":str(put_metadata_result.unwrap_err()),
+                                "detail":f"Failed to put metadata: {replica.peer_id}"
+                            })
+                            raise put_metadata_result.unwrap_err()
+                        
+
+                        put_metadata_response = put_metadata_result.unwrap()
+                        tasks_ids.append(put_metadata_response.task_id)
+                        peers_ids.append(replica.peer_id)
 
                     task = TaskX(
-                        group_id= group_id,
-                        task_id=put_metadata_response.task_id,
-                        operation="PUT",
-                        bucket_id=bucket_id,
-                        key=metadata.key,
-                        peers=[replica.peer_id],
-                        size=metadata.size,
-                        content_type=metadata.content_type
+                        group_id     = group_id,
+                        task_id      = put_metadata_response.task_id,
+                        operation    = "PUT",
+                        bucket_id    = bucket_id,
+                        key          = metadata.key,
+                        # peers        = [replica.peer_id],
+                        peers        = peers_ids,
+                        size         = metadata.size,
+                        content_type = metadata.content_type
                     )
                     add_task_result = await spm_client.put_task(task=task)
                     if add_task_result.is_err:
+                        self.log.error({
+                            "detail":"Failed to put task",
+                            "task_id":task.task_id,
+                            "error":str(add_task_result.unwrap_err())
+                        })
                         raise add_task_result.unwrap_err()
                     # tasks_ids.append(task.task_id)
                     end_at = T.time()
@@ -449,7 +485,7 @@ class BucketsController():
                         "bucket_id":bucket_id,
                         "key":metadata.key,
                         "size":metadata.size,
-                        "peer_id":replica.peer_id,
+                        "replicas":peers_ids,
                         "task_id":task.task_id,
                         "content_type":task.content_type,
                         "replica_factor":metadata.replication_factor,
@@ -457,11 +493,11 @@ class BucketsController():
                     })
 
                     put_metadata_response = InterfaceX.PutMetadataResponse(
-                        bucket_id=bucket_id,
-                        key=key,
-                        replicas=[replica.peer_id],
-                        tasks_ids=[task.task_id],
-                        service_time=T.time()- arrival_time,
+                        bucket_id    = bucket_id,
+                        key          = key,
+                        replicas     = peers_ids,
+                        tasks_ids    = [group_id],
+                        service_time = T.time()- arrival_time,
                     )
                     return JSONResponse(content=jsonable_encoder(put_metadata_response))
 
@@ -483,78 +519,113 @@ class BucketsController():
                 start_time = T.time()
                 
                 # =========================GET.TASK=======================================
-                get_task_timestamp = T.time_ns()
                 maybe_task         = await spm_client.get_task(task_id=task_id)
 
                 if maybe_task.is_err:
                     detail = "Task({}) not found".format(task_id)
+                    self.log.error({
+                        "detail":detail,
+                        "task_id":task_id,
+                        "error":str(maybe_task.unwrap_err())
+                    })
                     raise HTTPException(status_code=404, detail=detail)
                 task = maybe_task.unwrap()
                 background_task.add_task(self.after_operation_task(operation="PUT", bucket_id=task.bucket_id, key=task.key,t1=start_time,size=task.size))
                 if not task.operation.value == Operations.PUT.value:
-                    raise HTTPException(status_code=409, detail=f"Expected task operation [PUT], but was received [{task.operation}]")
+                    detail = f"Expected task operation [PUT], but was received [{task.operation}]"
+                    self.log.error({
+                        "detail":detail,
+                    })
+                    raise HTTPException(status_code=409, detail=detail )
 
                 # =========================GET.PEER=======================================
-                
-                get_task_timestamp = T.time_ns()
-                maybe_peer         = await spm_client.get_peer_by_id(peer_id=peer_id)
-                if maybe_peer.is_err:
-                    raise HTTPException(status_code=404, detail="Peer({}) is not available.".format(peer_id))
-                # else:
-                peer = maybe_peer.unwrap()
-
-                try:
-
-                    # =========================READ.DATA=======================================
-                    get_task_timestamp = T.time_ns()
-                    value              = await data.read()
-                    size               = len(value)
-                    if size != task.size:
-                        raise HTTPException(status_code=500, detail="Data size mistmatch {} != {}".format(size, task.size))
-                    # =========================PUT.DATA=======================================
-                    get_task_timestamp = T.time_ns()
-                    result = await peer.put_data(task_id=task_id,key=task.key,value=value,content_type=task.content_type)
+                # =========================READ.DATA=======================================
+                value              = await data.read()
+                size               = len(value)
+                if size != task.size:
+                    detail = "Data size mistmatch {} != {}".format(size, task.size)
+                    self.log.error({
+                        "detail":detail,
+                    })
+                    raise HTTPException(status_code=400, detail=detail )
+                tp = T.time()
+                errors = []
+                headers = {}
+                for peer_id in task.peers:
+                    _t1 = T.time()
+                    maybe_peer = await spm_client.get_peer_by_id(peer_id=peer_id)
+                    if maybe_peer.is_err:
+                        detail = f"Peer({peer_id}) is not available."
+                        self.log.error({
+                            "detail":detail,
+                            "peer_id":peer_id,
+                            "error":str(maybe_peer.unwrap_err())
+                        })
+                        errors.append(detail)
+                        continue
+                    peer = maybe_peer.unwrap()
+                    result = await peer.put_data(task_id=task_id,key=task.key,value=value,content_type=task.content_type,headers=headers)
                     if result.is_err:
+                        detail = f"Put data failed: {peer.peer_id}"
                         self.log.error({
                             "event":"PUT.DATA.FAILED",
-                            "detail":str(result.unwrap_err())
+                            "detail":detail,
+                            "error":str(result.unwrap_err())
                         })
-                        raise HTTPException(detail = str(result.unwrap_err()), status_code= 500 )
-                    end_at = T.time()
+                        errors.append(detail)
+                        continue
                     self.log.info({
-                        "event":"PUT.DATA",
-                        "arrival_time":start_time,
-                        "end_at":end_at,
+                        "event":"PUT.DATA.REPLICA",
+                        "peer_id":peer.peer_id,
                         "bucket_id":task.bucket_id,
                         "key":task.key,
-                        "size":task.size,
-                        "task_id":task_id,
-                        "peer_id":peer.peer_id,
-                        "response_time":end_at- start_time
+                        "response_time":T.time() - _t1
                     })
-                    get_task_timestamp = T.time_ns()
-                    await spm_client.delete_task(task_id=task_id)
-                    return Response(content=None, status_code=201)
-
-                except R.exceptions.HTTPError as e:
-                    detail = str(e.response.content.decode("utf-8") )
-                    # e.response.reason
-                    status_code = e.response.status_code
+                        # raise HTTPException(detail = str(result.unwrap_err()), status_code= 500 )
+                end_at = T.time()
+                # try:
+                    # =========================PUT.DATA=======================================
+                    # get_task_timestamp = T.time_ns()
+                self.log.info({
+                    "event":"PUT.DATA",
+                    "arrival_time":start_time,
+                    "end_at":end_at,
+                    "bucket_id":task.bucket_id,
+                    "key":task.key,
+                    "size":task.size,
+                    "task_id":task_id,
+                    "peer_ids":",".join(task.peers),
+                    "errors":len(errors),
+                    "response_time":end_at- start_time
+                })
+                # get_task_timestamp = T.time_ns()
+                _res = await spm_client.delete_tasks_by_group(group_id=task.group_id)
+                if _res.is_err:
+                    detail = f"Failed to delete tasks by group ID: {task.group_id}"
                     self.log.error({
                         "detail":detail,
-                        "status_code":status_code,
-                        "reason":e.response.reason,
+                        "error":str(_res.unwrap_err())
                     })
-                    raise HTTPException(status_code=status_code, detail=detail  )
-                except R.exceptions.ConnectionError as e:
-                    detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-                    self.log.error({
-                        "detail":detail,
-                        "status_code":500
-                    })
-                    raise HTTPException(status_code=500, detail=detail  )
+                    raise HTTPException(status_code=500, detail=detail)
+                return Response(content=None, status_code=201)
 
-
+                # except R.exceptions.HTTPError as e:
+                #     detail = str(e.response.content.decode("utf-8") )
+                #     # e.response.reason
+                #     status_code = e.response.status_code
+                #     self.log.error({
+                #         "detail":detail,
+                #         "status_code":status_code,
+                #         "reason":e.response.reason,
+                #     })
+                #     raise HTTPException(status_code=status_code, detail=detail  )
+                # except R.exceptions.ConnectionError as e:
+                #     detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
+                #     self.log.error({
+                #         "detail":detail,
+                #         "status_code":500
+                #     })
+                #     raise HTTPException(status_code=500, detail=detail  )
 
 
         @disconnect_protected()
@@ -567,24 +638,32 @@ class BucketsController():
             chunk_size: Annotated[Union[str, None], Header()] = "10mb",
         ):
             _chunk_size = HF.parse_size(chunk_size)
-            start_time = T.time()
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
-            tmp_path = temp_file.name
+            start_time  = T.time()
+            temp_file   = tempfile.NamedTemporaryFile(delete=False)
+            tmp_path    = temp_file.name
             temp_file.close()
             try:
                 # ============ GET TASK ============
-                task_maybe = await spm_client.get_task(task_id=task_id)
-                if task_maybe.is_err:
-                    raise task_maybe.unwrap_err()
-                task = task_maybe.unwrap()
+                task_result = await spm_client.get_task(task_id=task_id)
+                if task_result.is_err:
+                    self.log.error({
+                        "error_type":"TASK.NOT.FOUND",
+                        "error_code":404,
+                        "detail":f"Task({task_id}) not found",
+                        "error":str(task_result.unwrap_err())
+                    })
+                    raise task_result.unwrap_err()
+                task = task_result.unwrap()
 
                 if task.operation.value != Operations.PUT.value:
-                    raise HTTPException(status_code=409, detail=f"Expected task operation [PUT], received [{task.operation}]")
+                    detail = f"Expected task operation [PUT], but was received [{task.operation}]"
+                    self.log.error({
+                        "detail":detail,
+                    })
+                    raise HTTPException(status_code=409, detail=detail)
 
                     # ============ STREAM TO TEMP FILE ============
-                # print("HERE->", task.bucket_id,task.key)
-                # expected_size = int(request.headers.get("content-length", 0))
-                # received_size = 0
+ 
                 total =0
                 t_transfer = T.time()
                 async with aiofiles.open(tmp_path, "wb") as f:
@@ -615,76 +694,87 @@ class BucketsController():
                                 break
 
                         elif msg_type == "http.disconnect":
+                            self.log.error({
+                                "event":"HTTP.DISCONNECT",
+                            })
                             raise HTTPException(499, "Client disconnected")
-                self.log.info({
-                    "event":"UPLOAD.COMPLETED",
-                    "bucket_id":task.bucket_id,
-                    "key":task.key,
-                    "size":HF.format_size(total),
-                    "response_time":T.time() - t_transfer
-                })
-                # print("Upload completed:", HF.format_size(total))
+                    self.log.info({
+                        "event":"UPLOAD.COMPLETED",
+                        "bucket_id":task.bucket_id,
+                        "key":task.key,
+                        "size":HF.format_size(total),
+                        "response_time":T.time() - t_transfer
+                    })
 
-                # try:
-                    
-                #     print(request.headers)
-                #     total_size = 0
-                #     stream = request.stream()
-                #     async with aiofiles.open(tmp_path, mode="wb") as f:
-                #         async for chunk in stream:
-                #             if await request.is_disconnected():
-                #                 self.log.error("Client disconnected")
-                #                 raise HTTPException(status_code=499, detail="Client disconnected during upload")
-                #             # if not chunk:
-                #                 # self.log.debug("EMPTY_CHUNK")
-                #                 # break
-                #             total_size += len(chunk)
-                #             print(f"Received[{task.bucket_id,task.key}]: {HF.format_size(total_size)}")
-                #             await f.write(chunk)
-                #         await f.flush()
-                # except Exception as e:
-                #     print("ERROR!!!!!!!!",e)
-                # ============ STREAM TO PEERS ============
+                    # ============ STREAM TO PEERS ============
+                    errors = []
+                async def file_chunk_generator(file_path: str, chunk_size: int):
+                    async with aiofiles.open(file_path, "rb") as af:
+                        while True:
+                            chunk = await af.read(chunk_size)
+                            # print("CUINK", len(chunk))
+                            if not chunk:
+                                break
+                            yield chunk
+                
+                peers_ids = []
                 for peer_id in task.peers:
-                    tp = T.time()
+                    _t1 = T.time()
                     maybe_peer = await spm_client.get_peer_by_id(peer_id=peer_id)
                     if maybe_peer.is_err:
-                        raise HTTPException(status_code=404, detail="No peers available")
+                        detail = f"Peer({peer_id}) is not available."
+                        self.log.error({
+                            "detail":detail,
+                            "peer_id":peer_id,
+                            "error":str(maybe_peer.unwrap_err())
+                        })
+                        errors.append(detail)
+                        continue
+                        # raise HTTPException(status_code=404, detail="No peers available")
                     peer = maybe_peer.unwrap()
 
                     headers = {}
-
-                    async def file_chunk_generator(file_path: str, chunk_size: int):
-                        async with aiofiles.open(file_path, "rb") as af:
-                            while True:
-                                chunk = await af.read(chunk_size)
-                                # print("CUINK", len(chunk))
-                                if not chunk:
-                                    break
-                                yield chunk
-             
-
                     result = await peer.put_chunked(
-                        task_id=task_id,
-                        chunks=file_chunk_generator(file_path=temp_file.name,chunk_size=_chunk_size),
-                        headers=headers
+                        task_id = task_id,
+                        chunks  = file_chunk_generator(file_path=temp_file.name,chunk_size=_chunk_size),
+                        headers = headers
                     )
+
+                    if result.is_err:
+                        detail =f"Failed put data: {peer_id}"
+                        error = str(result.unwrap_err())
+                        self.log.error({
+                            "event":"FAILED.PUT.REPLICA",
+                            "peer_id":peer_id,
+                            "error":error,
+                            "detail":detail
+                        })
+                        errors.append(detail)
+                        continue
+                        # raise result.unwrap_err()
+                    peers_ids.append(peer_id)
                     self.log.info({
-                        "event":"PUT.DATA.PEER",
+                        "event":"PUT.DATA.REPLICA",
                         "peer_id":peer_id,
                         "bucket_id":task.bucket_id,
                         "key":task.key,
-                        "ok":result.is_ok,
-                        "response_time": T.time() -tp
+                        "response_time": T.time() -_t1
                     })
-                    if result.is_err:
-                        
-                        raise result.unwrap_err()
-
-                    response = result.unwrap()
+                    _ = result.unwrap()
+                    # response.
 
                 # ============ DELETE TASK ============
-                await spm_client.delete_task(task_id=task_id)
+                # await spm_client.delete_task(task_id=task_id)
+                _res = await spm_client.delete_tasks_by_group(group_id=task.group_id)
+
+                if _res.is_err:
+                    detail = "Failed to delete tasks by group ID"
+                    self.log.error({
+                        "detail":detail,
+                        "error":str(_res.unwrap_err()),
+                        "group_id":task.group_id
+                    })
+                    raise HTTPException(status_code=500, detail=detail)
 
                 # ============ BACKGROUND CACHE ============
                 def cache_from_file(cache:CacheX, key:str, file_path:str):
@@ -699,12 +789,22 @@ class BucketsController():
                             "path":file_path,
                             "response_time":T.time() - t1
                         })
+
                     except Exception as e:
                         self.log.error({
                             "event": "CACHE.ERROR",
                             "detail": str(e),
                             "file_path": file_path
                         })
+                    finally:
+                        try:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                        except Exception as e:
+                            self.log.error({
+                                "error_type":"FAILED.REMOVE.TMP.FILE",
+                                "error":str(e)
+                            })
 
                 background_task.add_task(
                     cache_from_file,
@@ -721,6 +821,7 @@ class BucketsController():
                     "bucket_id": task.bucket_id,
                     "key": task.key,
                     "size": task.size,
+                    "group_id":task.group_id,
                     "task_id": task_id,
                     "peers": task.peers,
                     "content_type": task.content_type,
@@ -736,7 +837,15 @@ class BucketsController():
                     size=task.size
                 ))
 
-                return JSONResponse(content=jsonable_encoder(response))
+                ress = InterfaceX.RouterPutChunkedResponse(
+                    bucket_id    = task.bucket_id,
+                    combined_key = f"{task.bucket_id}@{task.key}",
+                    key          = task.key,
+                    peer_ids     = peers_ids,
+                    size         = task.size
+
+                )
+                return JSONResponse(content=jsonable_encoder(ress))
 
             except HTTPException as e:
                 self.log.error({
@@ -778,11 +887,6 @@ class BucketsController():
                     temp_file.close()
                 except:
                     pass
-
-
-
-
-
 
 
         # @disconnect_protected()
@@ -965,7 +1069,6 @@ class BucketsController():
             content_type:str = "",
             chunk_size:Annotated[Union[str,None], Header()]="10mb",
             peer_id:Annotated[Union[str,None], Header()]=None,
-            # local_peer_id:Annotated[Union[str,None], Header()]=None,
             filename:str = "",
             attachment:bool = False,
             force_get:Annotated[Union[int,None], Header()] = 1,
@@ -1283,7 +1386,7 @@ class BucketsController():
                 peers_response = peers_result.unwrap()
                 peers = list(map(lambda x:x.to_async_peer(),peers_response.available))
 
-                responses:List[Metadata] = []
+                responses:List[PutMetadataDTO] = []
                 tmp_keys = []
                 size= 0
                 for peer in peers:
@@ -1471,7 +1574,7 @@ class BucketsController():
                     default_del_by_ball_id_response = DeletedByBallIdResponse(n_deletes=0, ball_id=_ball_id)
                     for peer in  peers:
                         start_time = T.time()
-                        chunks_metadata_result:Result[Iterator[Metadata],Exception] = await peer.get_chunks_metadata(
+                        chunks_metadata_result:Result[Iterator[PutMetadataDTO],Exception] = await peer.get_chunks_metadata(
                             key=_ball_id,
                             bucket_id=_bucket_id,
                             headers=headers

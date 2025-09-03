@@ -1,0 +1,124 @@
+version: "3.9"
+services:
+  mictlanx-router-0:
+    image: nachocode/mictlanx:router-0.1.0a0
+    restart: unless-stopped
+    env_file:
+      - .env.dev
+    networks:
+      - mictlanx
+    ports:
+      - "60666:60666"
+    volumes:
+      - mictlanx-router-0-logs:/log
+
+    # command: gunicorn --worker-class uvicorn.workers.UvicornWorker  mictlanxrouter.server:app --bind ${MICTLANX_ROUTER_HOST-0.0.0.0}:${MICTLANX_ROUTER_PORT-60666}  --workers ${MICTLANX_MAX_WORKERS-1}
+    # command: sleep infinity;
+    command: > 
+      sh -c 'gunicorn --worker-class uvicorn.workers.UvicornWorker
+      mictlanxrouter.server:app
+      --bind ${MICTLANX_ROUTER_HOST-0.0.0.0}:${MICTLANX_ROUTER_PORT-60666}  
+      --workers ${MICTLANX_MAX_WORKERS-1}'
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:60666/docs"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  mictlanx-summoner-0:
+    image: nachocode/mictlanx:summoner
+    container_name: mictlanx-summoner-0
+    hostname: mictlanx-summoner-0
+    privileged: true
+    ports:
+      - 15000:15000
+    environment:
+      - USER_ID=1001
+      - GROUP_ID=1002
+      - DOCKER_GID=1001
+      - BASE_PATH=${BASE_PATH-/app/mictlanx}
+      - BIN_NAME=summoner
+      - NODE_ID=mictlanx-summoner-0
+      - NODE_PORT=15000
+      - IP_ADDRESS=mictlanx-summoner-0
+      - SERVER_IP_ADDR=0.0.0.0
+      - LOG_PATH=${BASE_PATH-/app/mictlanx}/log
+      - LOCAL_PATH=${BASE_PATH-/app/mictlanx}/local
+      - DATA_PATH=${BASE_PATH-/app/mictlanx}/data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - mictlanx-summoner-0:/mictlanx
+    networks:
+      - mictlanx
+
+  mictlanx-rm-0:
+    image: ${IMAGE:-nachocode/mictlanx:rm-0.1.0a0}
+    container_name: mictlanx-rm-0
+    restart: unless-stopped
+    networks: [mictlanx]
+    ports:
+      - "5555:5555"
+    volumes:
+      - mictlanx-rm-db:/mictlanx/db
+    command: ["python", "-m", "mictlanxrm.main"]
+    environment:
+      # === SPM (ZeroMQ) ===
+      MICTLANX_PROTOCOL: "tcp"
+      MICTLANX_IP_ADDR: "0.0.0.0"
+      MICTLANX_PORT: "5555"
+      MICTLANX_DEBUG: "0"
+      MICTLANX_GC_TIMEOUT: "60s"
+      LOCAL_STORE_PATH: "/mictlanx/db/x.json"
+
+      # === Summoner ===
+      SUMMONER_IP_ADDR: "mictlanx-summoner-0"
+      SUMMONER_PROTOCOL: "http"
+      SUMMONER_PORT: "15000"
+      SUMMONER_API_VERSION: "3"
+
+      # === Peers bootstrapping ===
+      MICTLANX_PEERS_PROTOCOL: "http"
+      MICTLANX_PEERS_API_VERSION: "4"
+      MICTLANX_PEERS: "mictlanx://mictlanx-peer-0@mictlanx-peer-0:25000,mictlanx-peer-1@mictlanx-peer-1:25001/?protocol=http&api_version=4"
+
+      # === Default peer resources ===
+      DEFAULT_PEER_MEMORY: "2GB"
+      DEFAULT_PEER_DISK: "100GB"
+      DEFAULT_PEER_CPU: "1"
+
+      # === Logging ===
+      STORAGE_PEER_MANAGER_SHOW_LOGS: "INFO"
+
+      # === StoragePeerManager params ===
+      MAX_RETRIES: "2"
+      MAX_IDLE_TIME: "10s"
+      QUEUE_TICK_TIMEOUT: "5s"
+      MAX_TIMEOUT_TO_RECOVER: "30s"
+      SUMMONER_BASE_PORT: "25000"
+      SUMMONER_BASE_PROTOCOL: "http"
+      SUMMONER_PHYSICAL_NODES_INDEXES: "0,2,3,4,5,6,7,8,9"
+      DEBUG: "True"  # internal SPM params flag (distinct from MICTLANX_DEBUG)
+      SUMMONER_MODE: "docker"
+      MAX_RECOVER_TIME_UNTIL_RESTART: "10sec"
+      PEERS_CONFIG_PATH: ""
+      MAX_TIMEOUT_TO_SAVE_PEER_CONFIG: "30min"
+      PEER_ELASTIC: "True"
+      SUMMONER_PEER_DOCKER_IMAGE: "nachocode/mictlanx:peer-0.1.0a0"
+      PEER_MIN_INTERVAL_TIME: "5"
+      PEER_MAX_INTERVAL_TIME: "20"
+      DAEMON_TICK_TIMEOUT: "10s"
+      MAX_TIMEOUT_PEERS_HANDSHAKE: "30s"
+      MAX_TIMEOUT_TO_GET_STATS: "1m"
+      TICK_PEERS_HANDSHAKE: "5s"
+      RECOVER_TICK_TIMEOUT: "1m"
+      SUMMONER_NETWORK_ID: "mictlanx"
+
+volumes:
+  mictlanx-summoner-0:
+  mictlanx-router-0-logs:
+  mictlanx-rm-db:
+
+networks:
+  mictlanx:
+    external: true
