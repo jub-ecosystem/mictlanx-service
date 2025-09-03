@@ -261,6 +261,35 @@ chmod +x ./build.sh && ./build.sh <TAG>
 ```sh
 docker compose -f mictlanx-router.yml up -d 
 ```
+## 🔒 Generating Certificates for HTTPS
+
+To run the MictlanX Router with HTTPS using **FastAPI + Hypercorn**, you need a private key and a certificate in PEM format.  
+You can generate self-signed ones for local testing with **OpenSSL**:
+
+```sh
+# Generate private key
+openssl genrsa -out test_key.pem 2048
+
+# Generate certificate signing request (CSR)
+openssl req -new -key test_key.pem -out test_csr.pem
+
+# Generate self-signed certificate valid for 365 days
+openssl x509 -req -days 365 -in test_csr.pem -signkey test_key.pem -out test_cert.pem
+```
+This produces:
+
+- test_key.pem → private key
+
+- test_cert.pem → public certificate
+
+## Running hypercorn with HTTPS
+```
+hypercorn mictlanxrouter.server:app \
+  --bind 0.0.0.0:60666 \
+  --certfile=./test_cert.pem \
+  --keyfile=./test_key.pem
+
+```
 
 ## Contributing
 
