@@ -261,6 +261,11 @@ chmod +x ./build.sh && ./build.sh <TAG>
 ```sh
 docker compose -f mictlanx-router.yml up -d 
 ```
+
+## A shortcut
+```sh
+chmod +x ./deploy.sh && ./deploy.sh
+```
 ## 🔒 Generating Certificates for HTTPS
 
 To run the MictlanX Router with HTTPS using **FastAPI + Hypercorn**, you need a private key and a certificate in PEM format.  
