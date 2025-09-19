@@ -1,0 +1,58 @@
+name: Run Unit Test via Pytest  
+  
+on:
+  push: 
+    branches: ["*"]
+  pull_request:
+    branches: ["*"]
+    paths:
+      - "mictlanxrouter/**"
+      - "tests/**"
+      - "pyproject.toml"
+jobs:  
+  build:  
+    runs-on: ubuntu-latest  
+    env:
+      MICTLANX_LOG_PATH: ${{ github.workspace }}/mictlanx/client
+    strategy:  
+      matrix:  
+        python-version: ["3.9"]  
+    steps:  
+      - uses: actions/checkout@v3  
+      - name: Set up Python ${{ matrix.python-version }}  
+        uses: actions/setup-python@v4  
+        with:  
+          python-version: ${{ matrix.python-version }}  
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH  # Ensure poetry is on PATH
+      - name: Prepare log folder
+        run: |
+          mkdir -p "${MICTLANX_LOG_PATH}"
+      - name: Start MictlanX Router
+        run: |
+          chmod +x deploy.sh && ./deploy.sh
+      - name: Configure Poetry
+        run: |
+          poetry config virtualenvs.create true
+          poetry config virtualenvs.in-project true  # Optional: keeps `.venv` inside project
+
+      - name: Install Dependencies
+        run: poetry install --no-interaction
+
+
+      - name: Lint with Ruff  
+        run: |  
+          pip install ruff  
+          ruff check .  
+        continue-on-error: true  
+        
+      - name: Test with pytest  
+        run: |  
+          poetry run coverage run -m pytest  -v -s  
+        env:
+          LOG_PATH: log  
+      - name: Generate Coverage Report  
+        run: |  
+          poetry run coverage report -m
