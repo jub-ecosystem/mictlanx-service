@@ -12,7 +12,6 @@ nanoid = "^2.0.0"
 fastapi = "^0.111.0"
 python-multipart = "^0.0.9"
 aiorwlock = "^1.4.0"
-numpy =">=1.21,<=1.26"
 
 
 uvicorn = "^0.30.1"
