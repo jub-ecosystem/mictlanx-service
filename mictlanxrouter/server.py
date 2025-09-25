@@ -43,9 +43,8 @@ MICTLANX_CACHE_CAPACITY                  = int(os.environ.get("MICTLANX_CACHE_CA
 MICTLANX_CACHE_CAPACITY_STORAGE          = HF.parse_size(os.environ.get("MICTLANX_CACHE_CAPACITY_STORAGE","1GB"))
 MICTLANX_ROUTER_SERVICE_NAME             = os.environ.get("MICTLANX_ROUTER_SERVICE_NAME","mictlanx-router")
 MICTLANX_JAEGER_ENDPOINT                 = os.environ.get("MICTLANX_JAEGER_ENDPOINT","http://localhost:4318")
-MICTLANX_ZIPKIN_ENDPOINT                 = os.environ.get("MICTLANX_ZIPKIN_ENDPOINT","http://localhost:9411")
 MICTLANX_ROUTER_OPENTELEMETRY            = bool(int(os.environ.get("MICTLANX_ROUTER_OPENTELEMETRY",1)))
-LOG_PATH                                 = os.environ.get("LOG_PATH","/log")
+MICTLANX_LOG_PATH                                 = os.environ.get("MICTLANX_LOG_PATH","/log")
 MICTLANX_ROUTER_HOST                     = os.environ.get("MICTLANX_ROUTER_HOST","localhost")
 MICTLANX_ROUTER_PORT                     = int(os.environ.get("MICTLANX_ROUTER_PORT","60666"))
 MICTLANX_ROUTER_MAX_WORKERS              = int(os.environ.get("MAX_WORKERS","4"))
@@ -129,7 +128,7 @@ log                         = Log(
         console_handler_filter = lambda x: MICTLANX_ROUTER_LOG_SHOW,
         interval               = MICTLANX_ROUTER_LOG_INTERVAL,
         when                   = MICTLANX_ROUTER_LOG_WHEN,
-        path                   = LOG_PATH
+        path                   = MICTLANX_LOG_PATH
 )
 # _________________________________________
 
@@ -152,8 +151,8 @@ log.debug({
     "MICTLANX_ROUTER_HOST":MICTLANX_ROUTER_HOST,
     "MICTLANX_ROUTER_PORT":MICTLANX_ROUTER_PORT,
     "MICTLANX_JEAGER_ENDPOINT":MICTLANX_JAEGER_ENDPOINT,
-    "MICTLANX_ZIPKIN_ENDPOINT":MICTLANX_ZIPKIN_ENDPOINT,
-    "LOG_PATH": LOG_PATH,
+    "MICTLANX_ROUTER_OPENTELEMETRY":MICTLANX_ROUTER_OPENTELEMETRY,
+    "MICTLANX_LOG_PATH": MICTLANX_LOG_PATH,
     "MICTLANX_ROUTER_LOG_NAME": MICTLANX_ROUTER_LOG_NAME,
     "MICTLANX_ROUTER_LOG_INTERVAL": MICTLANX_ROUTER_LOG_INTERVAL,
     "MICTLANX_ROUTER_LOG_WHEN": MICTLANX_ROUTER_LOG_WHEN,
@@ -183,7 +182,7 @@ buckets_controller = Cx.BucketsController(log = log,tracer=tracer,cache = cache)
 cache_controller   = Cx.CacheController(log = log, cache =cache,tracer=tracer)
 
 app = FastAPI(
-    root_path = os.environ.get("OPENAPI_PREFIX","/mictlanx-router-0"),
+    root_path = os.environ.get("OPENAPI_PREFIX","/mictlanx"),
     lifespan  = lifespan
     
 )
