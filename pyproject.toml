@@ -33,7 +33,6 @@ tenacity = "^9.1.2"
 pydantic = "^2.11.7"
 opentelemetry-instrumentation = ">=0.47b0"
 opentelemetry-instrumentation-asgi = ">=0.47b0"
-mictlanxrm = {path = "/home/nacho/Programming/Python/mictlanx-healer/dist/mictlanxrm-0.1.0a1.tar.gz"}
 mictlanx = "0.1.0a1"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
