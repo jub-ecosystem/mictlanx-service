@@ -120,6 +120,10 @@ Before running the **MictlanX Router**, ensure the following requirements are me
      ```bash
       poetry self add poetry-plugin-shell
      ```
+5. Install jq :
+	```
+		sudo apt get jq
+	```
 
 5. **Docker Network: `mictlanx`**  
    - The Router expects peers and related services to be on the same custom Docker network.  
