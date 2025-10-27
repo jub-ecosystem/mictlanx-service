@@ -1615,14 +1615,15 @@ class BucketsController():
                     default_del_by_ball_id_response = DeletedByBallIdResponse(n_deletes=0, ball_id=_ball_id)
                     for peer in  peers:
                         start_time = T.time()
-                        chunks_metadata_result:Result[Iterator[PutMetadataDTO],Exception] = await peer.get_chunks_metadata(
-                            key=_ball_id,
+                        chunks_metadata_result= await peer.get_chunks_metadata(
+                            ball_id=_ball_id,
                             bucket_id=_bucket_id,
                             headers=headers
                         )
                         if chunks_metadata_result.is_ok:
                             response = chunks_metadata_result.unwrap()
-                            for i,metadata in enumerate(response):
+                            print("RESPONSE",response)
+                            for i,metadata in enumerate(response.balls):
                                 timestamp = T.time_ns()
                                 if i ==0:
                                     combined_key = "{}@{}".format(metadata.bucket_id,metadata.key)

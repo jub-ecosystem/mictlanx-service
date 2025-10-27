@@ -12,7 +12,7 @@ def test_stats():
     assert response.status_code == 200
 
 def test_put():
-    bucket_id = "bx"
+    bucket_id = "bx1"
     ball_id   = "b2"
     key       = "k2"
     data      = b"Hello from Pytest"
