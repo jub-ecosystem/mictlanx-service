@@ -136,8 +136,8 @@ class BucketsController():
 
 
     def add_routes(self):
+        
 
-        # @disconnect_protected()
         @self.router.get("/api/v4/buckets/{bucket_id}/{key}/size")
         async def get_size_by_key(bucket_id:str,key:str, spm_client:SPMClient = Depends(self.get_spm_client) ):
             try:
@@ -388,15 +388,23 @@ class BucketsController():
                 available_peers = get_replicas.available_replicas
                 if len(available_peers) ==0:
                     detail= "No available peers."
+                    replicas = list(map(lambda x:x.peer_id,get_replicas.replicas))
                     self.log.error({
                         "event":"NO.AVAILABLE.PEERS",
                         "bucket_id":bucket_id,
                         "key":key,
                         "detail":detail,
                         "available_peers":list(map(lambda x:x.peer_id,get_replicas.available_replicas)),
-                        "repicas":list(map(lambda x:x.peer_id,get_replicas.replicas))
+                        "repicas":replicas
                     })
-                    raise HTTPException(status_code=404, detail=detail ,headers={} )
+                    raise HTTPException(status_code=404, detail={
+                        "msg":detail,
+                        "suggestion":"Add more peers or delete replicas.",
+                        "bucket_id":bucket_id,
+                        "key":key,
+                        "replicas":replicas,
+                        "code":666 # static error code for no available peers
+                    } ,headers={} )
 
 
                 headers        = {"Update":update,"Task-Id":group_id}
@@ -1622,7 +1630,6 @@ class BucketsController():
                         )
                         if chunks_metadata_result.is_ok:
                             response = chunks_metadata_result.unwrap()
-                            print("RESPONSE",response)
                             for i,metadata in enumerate(response.balls):
                                 timestamp = T.time_ns()
                                 if i ==0:

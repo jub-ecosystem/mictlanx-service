@@ -122,6 +122,7 @@ class SharedMemoryData(XData):
     #         self.close()
     #     except Exception:
     #         pass
+
 class CacheX(ABC):
     """Abstract Base Class for a simple key-value cache (Key: str -> Value: bytes/memoryview)."""
     @abstractmethod
@@ -402,7 +403,6 @@ class LRUSharedMemoryCache(CacheX):
                     "name":name,
                     "size":size
                 })
-
 
 class LRUCache(CacheX):
     """LRU (Least Recently Used) Cache implementation using OrderedDict."""
