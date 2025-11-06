@@ -1,7 +1,9 @@
-version: "3.9"
 services:
   mictlanx-router-0:
-    image: nachocode/mictlanx:router-0.1.0a2
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    image: ${MICTLANX_ROUTER_DOCKER_IMAGE-nachocode/mictlanx:router-0.1.0a2}
     restart: unless-stopped
     env_file:
       - .env.dev
@@ -53,7 +55,7 @@ services:
       - mictlanx
 
   mictlanx-rm-0:
-    image: ${IMAGE:-nachocode/mictlanx:rm-0.1.0a2}
+    image: ${IMAGE:-nachocode/mictlanx:rm-0.1.0a2.nb1}
     container_name: mictlanx-rm-0
     restart: unless-stopped
     networks: [mictlanx]
@@ -61,6 +63,7 @@ services:
       - "5555:5555"
     volumes:
       - mictlanx-rm-db:/mictlanx/db
+      - ./peers.json:/app/peers.json
     command: ["python", "-m", "mictlanxrm.main"]
     environment:
       # === SPM (ZeroMQ) ===
@@ -101,7 +104,7 @@ services:
       DEBUG: "True"  # internal SPM params flag (distinct from MICTLANX_DEBUG)
       SUMMONER_MODE: "docker"
       MAX_RECOVER_TIME_UNTIL_RESTART: "10sec"
-      PEERS_CONFIG_PATH: ""
+      PEERS_CONFIG_PATH: "/app/peers.json"
       MAX_TIMEOUT_TO_SAVE_PEER_CONFIG: "30min"
       PEER_ELASTIC: "True"
       SUMMONER_PEER_DOCKER_IMAGE: "nachocode/mictlanx:peer-0.1.0a2"

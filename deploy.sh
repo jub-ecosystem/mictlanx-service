@@ -1,14 +1,15 @@
 #!/bin/bash
 
+readonly ENV_FILE=${1:-".env.dev"}
 echo "Creating [mictlanx] network..."
 
 docker network create --driver=bridge mictlanx || true
 
 echo "Removing existing routers"
-docker compose -f mictlanx-router.yml down
+docker compose --env-file $ENV_FILE -f mictlanx-router.yml down
 
 echo "Starting a new MictlanX Cluster "
-docker compose -f mictlanx-router.yml up -d
+docker compose --env-file $ENV_FILE -f mictlanx-router.yml up -d
 # -------------------------------
 # Healthcheck: wait for peers
 # -------------------------------
