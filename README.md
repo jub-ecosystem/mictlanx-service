@@ -120,6 +120,10 @@ Before running the **MictlanX Router**, ensure the following requirements are me
      ```bash
       poetry self add poetry-plugin-shell
      ```
+5. Install jq :
+	```
+		sudo apt get jq
+	```
 
 5. **Docker Network: `mictlanx`**  
    - The Router expects peers and related services to be on the same custom Docker network.  
@@ -296,6 +300,99 @@ hypercorn mictlanxrouter.server:app \
 
 ```
 
+
+## 🧪 Testing
+
+Unit and integration tests are included under the `tests/` directory to validate all Router endpoints (`PeersController`, `BucketsController`, and `CacheController`).
+
+### ⚠️ Important
+
+> **The tests require that the MictlanX Replica Manager (`mictlanx-rm`) service is running locally.**
+> Without it, several endpoints that depend on the `SPMClient` (such as `/api/v4/peers`, `/api/v4/buckets`, and `/api/v4/cache`) will fail to connect and return errors (e.g., 500 or “No available peers”).
+
+Ensure that **`mictlanx-rm`** is running in your local environment before executing any tests.
+
+For example:
+
+```bash
+cd ~/Cinvestav/mictlanx-rm
+poetry run ./run_local.sh
+```
+
+Once `mictlanx-rm` is active, you can safely run the tests for the Router.
+
+---
+
+### 🧰 Run all tests
+
+Execute all unit tests with verbose output:
+
+```bash
+poetry run pytest -s -v tests/
+```
+
+---
+
+### 📈 Run with Coverage
+
+To measure test coverage and generate a report:
+
+```bash
+poetry run coverage erase
+poetry run coverage run -m pytest -s -v tests/
+poetry run coverage report -m
+```
+
+This will display coverage results directly in the terminal.
+You can also generate an HTML report for visualization:
+
+```bash
+poetry run coverage html
+xdg-open htmlcov/index.html   # or open htmlcov/index.html manually
+```
+
+---
+
+### 🧩 Test Structure
+
+| File                                | Description                                                       |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `tests/test_peers_controller.py`    | Tests for `/api/v4/peers` and `/api/v4/xpeers` endpoints.         |
+| `tests/test_buckets_controller.py`  | Tests for `/api/v4/buckets` operations (metadata, data, delete).  |
+| `tests/test_cache_controller.py`    | Tests for `/api/v4/cache` and `/api/v4/cache/reset`.              |
+
+---
+
+### ✅ Example Successful Output
+
+```text
+================================================= test session starts ==================================================
+platform linux -- Python 3.10.16, pytest-8.4.2
+collected 18 items
+
+tests/test_peers_controller.py ........
+tests/test_buckets_controller.py ......
+tests/test_cache_controller.py ...
+================================================== 18 passed in 2.34s ==================================================
+```
+
+---
+
+### 🧭 Troubleshooting
+
+If tests fail with messages such as:
+
+```
+GET.SPM.CLIENT.FAILED - Connection refused
+```
+
+Make sure that:
+
+* The **MictlanX Replica Manager** (`mictlanx-rm`) is running locally.
+* It is reachable at the default address and port (`localhost:5555`).
+* Environment variables like `MICTLANX_DAEMON_HOSTNAME` and `MICTLANX_DAEMON_PORT` are correctly set.
+
+
 ## Contributing
 
 Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
@@ -319,6 +416,8 @@ Don't forget to give the project a star! Thanks again!
 Distributed under the MIT License. See `LICENSE.txt` for more information.
 
 <p align="right">(<a href="#top">back to top</a>)</p>
+
+
 
 <!-- CONTACT -->
 ## Contact
