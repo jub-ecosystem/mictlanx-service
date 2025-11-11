@@ -55,7 +55,7 @@ services:
       - mictlanx
 
   mictlanx-rm-0:
-    image: ${IMAGE:-nachocode/mictlanx:rm-0.1.0a2.nb1}
+    image: ${IMAGE:-nachocode/mictlanx:rm-0.1.0a3}
     container_name: mictlanx-rm-0
     restart: unless-stopped
     networks: [mictlanx]
