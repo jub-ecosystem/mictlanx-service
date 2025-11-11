@@ -53,4 +53,4 @@ body:
     attributes:
       label: Logs
       description: Paste any relevant logs or stack traces.
-      render: s
+      render: sh
