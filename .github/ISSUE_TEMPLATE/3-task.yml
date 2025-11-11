@@ -1,6 +1,6 @@
 name: 📌 Task
 description: Track a development or maintenance task.
-title: "[Task]: "
+title: "[task]: "
 labels: ["task"]
 assignees: []
 body:

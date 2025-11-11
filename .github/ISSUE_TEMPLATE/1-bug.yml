@@ -1,13 +1,15 @@
 name: 🐛 Bug Report
 description: File a bug report to help us improve.
-title: "[Bug]: "
+title: "[bug]: "
 labels: ["bug", "triage"]
 assignees: []
 body:
+
   - type: markdown
     attributes:
       value: |
         Thanks for reporting a bug! Please fill out the details below.
+
   - type: textarea
     id: what-happened
     attributes:
@@ -45,6 +47,7 @@ body:
         - macOS
         - Windows
         - Other
+
   - type: textarea
     id: logs
     attributes:
