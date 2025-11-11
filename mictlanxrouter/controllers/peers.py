@@ -194,7 +194,7 @@ class PeersController():
                 self.log.info({
                     "event":"LEAVE.PEER",
                     "peer_id":peer_id,
-                    "ok":res,
+                    "ok":res.is_ok,
                     "response_time":T.time() - start_time
                 })
                 return Response(content=None, status_code=204)
@@ -230,7 +230,7 @@ class PeersController():
                 self.log.info({
                     "event":"LEAVE.PEER",
                     "peer_ids":peers,
-                    "ok":res,
+                    "ok":res.is_ok,
                     "response_time":T.time() - start_time
                 })
                 return Response(content=None, status_code=204)

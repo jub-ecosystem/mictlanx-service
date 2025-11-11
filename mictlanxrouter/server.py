@@ -35,7 +35,7 @@ if os.path.exists(ENV_FILE_PATH):
     load_dotenv(ENV_FILE_PATH)
 
 
-
+MICTLANX_TEST                            = bool(int(os.environ.get("MICTLANX_TEST","0")))
 MICTLANX_DEBUG                           = bool(int(os.environ.get("MICTLANX_DEBUG","0")))
 MICTLANX_CACHE                           = bool(int(os.environ.get("MICTLANX_CACHE",1)))
 MICTLANX_CACHE_EVICTION_POLICY           = os.environ.get("MICTLANX_CACHE_EVICTION_POLICY","LRU_SM")
@@ -66,7 +66,7 @@ MICTLANX_ROUTER_NETWORK_ID               = os.environ.get("MICTLANX_ROUTER_NETWO
 MICTLANX_PROTOCOL                        = os.environ.get("MICTLANX_PROCOTOL","http")
 MICTLANX_API_VERSION                     = os.environ.get("MICTLANX_API_VERSION","4")
 MICTLANX_PEERS_URI                       = os.environ.get("MICTLANX_PEERS_URI",f"mictlanx://mictlanx-peer-0@localhost:24000,mictlanx-peer-1@localhost:24001/?protocol={MICTLANX_PROTOCOL}&api_version={MICTLANX_API_VERSION}")
-MICTLANX_PEERS                           = MictlanXURI.parse_peers(uri = MICTLANX_PEERS_URI)
+# MICTLANX_PEERS                           = MictlanXURI.parse_peers(uri = MICTLANX_PEERS_URI)
 MICTLANX_TIMEOUT                         = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
 MICTLANX_SUMMONER_API_VERSION            = Some(int(os.environ.get("MICTLANX_SUMMONER_API_VERSION","3")))
 MICTLANX_SUMMONER_IP_ADDR                = os.environ.get("MICTLANX_SUMMONER_IP_ADDR","localhost")
