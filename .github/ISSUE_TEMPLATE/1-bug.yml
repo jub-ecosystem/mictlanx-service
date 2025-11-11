@@ -33,7 +33,7 @@ body:
     attributes:
       label: Version
       description: What version of our software are you running?
-      default: 0.1.0
+      value: 0.1.0
     validations:
       required: true
 
@@ -53,4 +53,4 @@ body:
     attributes:
       label: Logs
       description: Paste any relevant logs or stack traces.
-      render: sh
+      render: shell
