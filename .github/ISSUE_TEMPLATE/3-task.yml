@@ -22,6 +22,7 @@ body:
       label: Goal
       description: What is the intended outcome?
       placeholder: "Improve performance, fix maintainability ..."
+
   - type: checkboxes
     id: acceptance
     attributes:
@@ -31,11 +32,3 @@ body:
         - label: Unit tests updated or added
         - label: Documentation updated
         - label: Code passes lint/format checks
-  - type: checkboxes
-    id: terms
-    attributes:
-      label: Code of Conduct
-      description: By submitting, you agree to follow our [Code of Conduct](../CODE_OF_CONDUCT.md).
-      options:
-        - label: I agree to follow this project's Code of Conduct
-          required: true
