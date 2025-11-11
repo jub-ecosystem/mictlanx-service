@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 from mictlanxrouter.server import app
-from mictlanxrouter.dto import PutMetadataDTO
+from mictlanxrouter.dto import PutMetadataDTO,DeletedByBallIdResponse
 from mictlanx.interfaces import PutMetadataResponse
 from xolo.utils.utils import Utils as XoloUtils
 import io
@@ -38,6 +38,26 @@ def _build_put_metadata_dto(
         },
     )
 
+def test_delete_not_found():
+    """
+    Happy path:
+    1. DELETE /api/v4/buckets/{bucket_id}/bid/{ball_id} to clean up any previous data.
+    2. POST   /api/v4/buckets/{bucket_id}/metadata to create metadata.
+    3. POST   /api/v4/buckets/data/{task_id} to upload data.
+    4. GET    /api/v4/buckets/{bucket_id}/{key} with Peer-Id header to retrieve data.
+    """
+    bucket_id = "pytest-bucket-4"
+    ball_id   = "pytest-ball-1"
+
+    # Step 0: Clean up any previous data by ball_id
+    resp                   = client.delete(f"/api/v4/buckets/{bucket_id}/bid/{ball_id}")
+    x = resp.json()
+    result_json            = DeletedByBallIdResponse.model_validate(x)
+    assert resp.status_code      == 200
+    assert result_json.n_deletes == 0
+    assert result_json.ball_id   == ball_id
+
+
 
 def test_put_metadata_put_data_and_get_data_happy_path():
     """
@@ -47,10 +67,10 @@ def test_put_metadata_put_data_and_get_data_happy_path():
     3. POST   /api/v4/buckets/data/{task_id} to upload data.
     4. GET    /api/v4/buckets/{bucket_id}/{key} with Peer-Id header to retrieve data.
     """
-    bucket_id = "pytest-bucket-4"
-    ball_id = "pytest-ball-1"
-    key = "pytest-key-1"
-    data = b"hola-mictlanx-buckets"
+    bucket_id = "pytest-bucket-5"
+    ball_id   = "pytest-ball-2"
+    key       = "pytest-key-2"
+    data      = b"hola-mictlanx-buckets"
 
     # Step 0: Clean up any previous data by ball_id
     resp = client.delete(f"/api/v4/buckets/{bucket_id}/bid/{ball_id}")
