@@ -1,6 +1,6 @@
 name: ✨ Feature Request
 description: Suggest an idea for this project.
-title: "[Feature]: "
+title: "[feature]: "
 labels: ["enhancement"]
 assignees: []
 body:
