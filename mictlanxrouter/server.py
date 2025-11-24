@@ -2,6 +2,7 @@ import os
 import sys
 import signal
 from contextlib import asynccontextmanager
+import time as T
 from dotenv import load_dotenv
 # 
 import humanfriendly as HF
@@ -25,60 +26,21 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 import mictlanxrouter.caching as ChX
 import mictlanxrouter.controllers as Cx
 from mictlanxrouter.opentelemetry import NoOpSpanExporter
+from mictlanxrouter import config
 # 
-from mictlanx.logger.log import Log
+from mictlanxrouter.log.logger_config import get_logger
 from mictlanx.services import  Summoner
+
 from mictlanx.utils.uri import MictlanXURI
 
-ENV_FILE_PATH = os.environ.get("ENV_FILE_PATH",".env.local")
-if os.path.exists(ENV_FILE_PATH):
-    load_dotenv(ENV_FILE_PATH)
 
+L = get_logger(name=config.MICTLANX_ROUTER_LOG_NAME)
 
-MICTLANX_TEST                            = bool(int(os.environ.get("MICTLANX_TEST","0")))
-MICTLANX_DEBUG                           = bool(int(os.environ.get("MICTLANX_DEBUG","0")))
-MICTLANX_CACHE                           = bool(int(os.environ.get("MICTLANX_CACHE",1)))
-MICTLANX_CACHE_EVICTION_POLICY           = os.environ.get("MICTLANX_CACHE_EVICTION_POLICY","LRU_SM")
-MICTLANX_CACHE_CAPACITY                  = int(os.environ.get("MICTLANX_CACHE_CAPACITY","100"))
-MICTLANX_CACHE_CAPACITY_STORAGE          = HF.parse_size(os.environ.get("MICTLANX_CACHE_CAPACITY_STORAGE","1GB"))
-MICTLANX_ROUTER_SERVICE_NAME             = os.environ.get("MICTLANX_ROUTER_SERVICE_NAME","mictlanx-router")
-MICTLANX_JAEGER_ENDPOINT                 = os.environ.get("MICTLANX_JAEGER_ENDPOINT","http://localhost:4318")
-MICTLANX_ROUTER_OPENTELEMETRY            = bool(int(os.environ.get("MICTLANX_ROUTER_OPENTELEMETRY",1)))
-MICTLANX_LOG_PATH                                 = os.environ.get("MICTLANX_LOG_PATH","/log")
-MICTLANX_ROUTER_HOST                     = os.environ.get("MICTLANX_ROUTER_HOST","localhost")
-MICTLANX_ROUTER_PORT                     = int(os.environ.get("MICTLANX_ROUTER_PORT","60666"))
-MICTLANX_ROUTER_MAX_WORKERS              = int(os.environ.get("MAX_WORKERS","4"))
-MICTLANX_ROUTER_LOG_NAME                 = os.environ.get("MICTLANX_ROUTER_LOG_NAME","mictlanx-router-0")
-MICTLANX_ROUTER_LOG_INTERVAL             = int(os.environ.get("MICTLANX_ROUTER_LOG_INTERVAL","24"))
-MICTLANX_ROUTER_LOG_WHEN                 = os.environ.get("MICTLANX_ROUTER_LOG_WHEN","h")
-MICTLANX_ROUTER_LOG_SHOW                 = bool(int(os.environ.get("MICTLANX_ROUTER_LOG_SHOW","1")))
-MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE = int(os.environ.get("MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE","100"))
-MICTLANX_ROUTER_SYNC_FAST                = bool(int(os.environ.get("MICTLANX_ROUTER_SYNC_FAST","1")))
-MICTLANX_ROUTER_MAX_PEERS                = int(os.environ.get("MICTLANX_ROUTER_MAX_PEERS","10"))
-MICTLANX_ROUTER_MAX_TTL                  = int(os.environ.get("MICTLANX_ROUTER_MAX_TTL","3"))
-MICTLANX_ROUTER_AVAILABLE_NODES          = os.environ.get("MICTLANX_ROUTER_AVAILABLE_NODES","0;1;2;3;4;5;6;7;8;9;10").split(";")
-MICTLANX_ROUTER_SHOW_REPLICATOR_LOGS     = bool(int(os.environ.get("MICTLANX_ROUTER_SHOW_REPLICATOR_LOGS","1")))
-MICTLANX_ROUTER_MAX_TRIES                = int(os.environ.get("MICTLANX_ROUTER_MAX_TRIES","60"))
-MICTLANX_ROUTER_MAX_TASKS                = int(os.environ.get("MICTLANX_ROUTER_MAX_TASKS","100"))
-MICTLANX_ROUTER_MAX_CONCURRENCY          = int(os.environ.get("MICTLANX_ROUTER_MAX_CONCURRENCY","5"))
-MICTLANX_ROUTER_MAX_PEERS_RF             = int(os.environ.get("MICTLANX_ROUTER_MAX_PEERS_RF","5"))
-MICTLANX_ROUTER_NETWORK_ID               = os.environ.get("MICTLANX_ROUTER_NETWORK_ID","mictlanx")
-MICTLANX_PROTOCOL                        = os.environ.get("MICTLANX_PROCOTOL","http")
-MICTLANX_API_VERSION                     = os.environ.get("MICTLANX_API_VERSION","4")
-MICTLANX_PEERS_URI                       = os.environ.get("MICTLANX_PEERS_URI",f"mictlanx://mictlanx-peer-0@localhost:24000,mictlanx-peer-1@localhost:24001/?protocol={MICTLANX_PROTOCOL}&api_version={MICTLANX_API_VERSION}")
-# MICTLANX_PEERS                           = MictlanXURI.parse_peers(uri = MICTLANX_PEERS_URI)
-MICTLANX_TIMEOUT                         = int(os.environ.get("MICTLANX_TIMEOUT","3600"))
-MICTLANX_SUMMONER_API_VERSION            = Some(int(os.environ.get("MICTLANX_SUMMONER_API_VERSION","3")))
-MICTLANX_SUMMONER_IP_ADDR                = os.environ.get("MICTLANX_SUMMONER_IP_ADDR","localhost")
-MICTLANX_SUMMONER_PORT                   = int(os.environ.get("MICTLANX_SUMMONER_PORT","15000"))
-MICTLANX_SUMMONER_MODE                   = os.environ.get("MICTLANX_SUMMONER_MODE","docker")
-MICTLANX_SUMMONER_SUBNET                 = os.environ.get("MICTLANX_SUMMONER_SUBNET","10.0.0.0/25")
-
-if MICTLANX_CACHE:
+if config.MICTLANX_CACHE:
     cache = ChX.CacheFactory.create(
-        eviction_policy=MICTLANX_CACHE_EVICTION_POLICY,
-        capacity=MICTLANX_CACHE_CAPACITY,
-        capacity_storage=MICTLANX_CACHE_CAPACITY_STORAGE
+        eviction_policy=config.MICTLANX_CACHE_EVICTION_POLICY,
+        capacity=config.MICTLANX_CACHE_CAPACITY,
+        capacity_storage=config.MICTLANX_CACHE_CAPACITY_STORAGE
     )
 else:
     cache = ChX.NoCache()
@@ -87,87 +49,82 @@ else:
 
 resource = Resource(
     attributes={
-        SERVICE_NAME: MICTLANX_ROUTER_SERVICE_NAME
+        SERVICE_NAME: config.MICTLANX_ROUTER_SERVICE_NAME
     }
 )
 
 
 trace_provider = TracerProvider(resource=resource)
 trace.set_tracer_provider(trace_provider)
-tracer = trace.get_tracer(MICTLANX_ROUTER_SERVICE_NAME)
-if not MICTLANX_ROUTER_OPENTELEMETRY:
+tracer = trace.get_tracer(config.MICTLANX_ROUTER_SERVICE_NAME)
+if not config.MICTLANX_ROUTER_OPENTELEMETRY:
     trace_provider.add_span_processor(SimpleSpanProcessor(NoOpSpanExporter()))
 else:
     # ===========================================================
     # JAEGER
     # ===========================================================
-    processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="{}/v1/traces".format(MICTLANX_JAEGER_ENDPOINT)))
+    processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="{}/v1/traces".format(config.MICTLANX_JAEGER_ENDPOINT)))
     trace_provider.add_span_processor(processor)
 
 # ===========================================================
 # CONSOLE_SPAN_EXPORTER
 # ===========================================================
-if MICTLANX_DEBUG:
+if config.MICTLANX_ROUTER_DEBUG:
     processor = BatchSpanProcessor(ConsoleSpanExporter())
     trace_provider.add_span_processor(processor)
 
 
 # ===========================================================
 def signal_handler(sig, frame):
-    global log
-    log.warning('Shutting down gracefully...')
+    L.info({
+        "EVENT": "SERVICE.SIGNAL",
+        "signal": int(sig),
+        "message": "Shutting down gracefully...",
+    })
     sys.exit(0)
 
 
 signal.signal(signal.SIGINT, signal_handler)
 
-# ===========================================================
 
-log                         = Log(
-        name                   = MICTLANX_ROUTER_LOG_NAME,
-        console_handler_filter = lambda x: MICTLANX_ROUTER_LOG_SHOW,
-        interval               = MICTLANX_ROUTER_LOG_INTERVAL,
-        when                   = MICTLANX_ROUTER_LOG_WHEN,
-        path                   = MICTLANX_LOG_PATH
-)
 # _________________________________________
 
 
 
 summoner        = Summoner(
-    ip_addr     = MICTLANX_SUMMONER_IP_ADDR, 
-    port        = MICTLANX_SUMMONER_PORT, 
-    api_version = MICTLANX_SUMMONER_API_VERSION,
+    ip_addr     = config.MICTLANX_SUMMONER_IP_ADDR, 
+    port        = config.MICTLANX_SUMMONER_PORT, 
+    api_version = config.MICTLANX_SUMMONER_API_VERSION,
     network= Some(
         IPv4Network(
-            MICTLANX_SUMMONER_SUBNET
+            config.MICTLANX_SUMMONER_SUBNET
         )
      )
 )
 
 
-log.debug({
-    "event":"MICTLANX_ROUTER_STARTED",
-    "MICTLANX_ROUTER_HOST":MICTLANX_ROUTER_HOST,
-    "MICTLANX_ROUTER_PORT":MICTLANX_ROUTER_PORT,
-    "MICTLANX_JEAGER_ENDPOINT":MICTLANX_JAEGER_ENDPOINT,
-    "MICTLANX_ROUTER_OPENTELEMETRY":MICTLANX_ROUTER_OPENTELEMETRY,
-    "MICTLANX_LOG_PATH": MICTLANX_LOG_PATH,
-    "MICTLANX_ROUTER_LOG_NAME": MICTLANX_ROUTER_LOG_NAME,
-    "MICTLANX_ROUTER_LOG_INTERVAL": MICTLANX_ROUTER_LOG_INTERVAL,
-    "MICTLANX_ROUTER_LOG_WHEN": MICTLANX_ROUTER_LOG_WHEN,
-    "MICTLANX_ROUTER_LOG_SHOW": MICTLANX_ROUTER_LOG_SHOW,
-    "MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE": MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE,
-    "MICTLANX_ROUTER_SYNC_FAST": MICTLANX_ROUTER_SYNC_FAST,
-    "MICTLANX_ROUTER_MAX_PEERS":MICTLANX_ROUTER_MAX_PEERS,
-    "MICTLANX_ROUTER_MAX_TTL": MICTLANX_ROUTER_MAX_TTL,
-    "MICTLANX_ROUTER_AVAILABLE_NODES": ";".join(MICTLANX_ROUTER_AVAILABLE_NODES),
-    "MICTLANX_ROUTER_SHOW_REPLICATOR_LOGS": MICTLANX_ROUTER_SHOW_REPLICATOR_LOGS,
-    "MICTLANX_ROUTER_MAX_TRIES": MICTLANX_ROUTER_MAX_TRIES,
-    "MICTLANX_PEERS": MICTLANX_PEERS_URI,
-    "MICTLANX_PROTOCOL": MICTLANX_PROTOCOL,
-    "MICTLANX_API_VERSION": MICTLANX_API_VERSION,
-    "MICTLANX_TIMEOUT": MICTLANX_TIMEOUT,
+L.debug({
+    "EVENT": "SERVICE.CONFIG",
+    "MICTLANX_ROUTER_HOST":                         config.MICTLANX_ROUTER_HOST,
+    "MICTLANX_ROUTER_PORT":                         config.MICTLANX_ROUTER_PORT,
+    "MICTLANX_JEAGER_ENDPOINT":                     config.MICTLANX_JAEGER_ENDPOINT,
+    "MICTLANX_ROUTER_OPENTELEMETRY":                config.MICTLANX_ROUTER_OPENTELEMETRY,
+    "MICTLANX_ROUTER_LOG_PATH":                            config.MICTLANX_ROUTER_LOG_PATH,
+    "MICTLANX_ROUTER_LOG_NAME":                     config.MICTLANX_ROUTER_LOG_NAME,
+    "MICTLANX_ROUTER_LOG_INTERVAL":                 config.MICTLANX_ROUTER_LOG_INTERVAL,
+    "MICTLANX_ROUTER_LOG_WHEN":                     config.MICTLANX_ROUTER_LOG_WHEN,
+    "MICTLANX_ROUTER_LOG_SHOW":                     config.MICTLANX_ROUTER_LOG_SHOW,
+    "MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE":     config.MICTLANX_ROUTER_REPLICATOR_QUEUE_MAXSIZE,
+    "MICTLANX_ROUTER_SYNC_FAST":                    config.MICTLANX_ROUTER_SYNC_FAST,
+    "MICTLANX_ROUTER_MAX_PEERS":                    config.MICTLANX_ROUTER_MAX_PEERS,
+    "MICTLANX_ROUTER_MAX_TTL":                      config.MICTLANX_ROUTER_MAX_TTL,
+    "MICTLANX_ROUTER_AVAILABLE_NODES":     ";".join(config.MICTLANX_ROUTER_AVAILABLE_NODES),
+    "MICTLANX_ROUTER_SHOW_REPLICATOR_LOGS":         config.MICTLANX_ROUTER_SHOW_REPLICATOR_LOGS,
+    "MICTLANX_ROUTER_MAX_TRIES":                    config.MICTLANX_ROUTER_MAX_TRIES,
+    "MICTLANX_PEERS":                               config.MICTLANX_PEERS_URI,
+    "MICTLANX_PROTOCOL":                            config.MICTLANX_PROTOCOL,
+    "MICTLANX_API_VERSION":                         config.MICTLANX_API_VERSION,
+    "MICTLANX_TIMEOUT":                             config.MICTLANX_TIMEOUT,
 })
 
 # ______________________________
@@ -175,11 +132,28 @@ log.debug({
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
-    yield
+    t0 = T.time()
 
-peers_controller   = Cx.PeersController(log = log, tracer=tracer, network_id=MICTLANX_ROUTER_NETWORK_ID, max_peers_rf=MICTLANX_ROUTER_MAX_PEERS_RF)
-buckets_controller = Cx.BucketsController(log = log,tracer=tracer,cache = cache)
-cache_controller   = Cx.CacheController(log = log, cache =cache,tracer=tracer)
+    # SERVICE.STARTUP
+    L.info({
+        "EVENT": "SERVICE.STARTUP",
+        "message": "MictlanX Router starting up...",
+        "host": config.MICTLANX_ROUTER_HOST,
+        "port": config.MICTLANX_ROUTER_PORT,
+    })
+    try:
+        yield
+    finally:
+        elapsed = T.time() - t0
+        L.info({
+            "EVENT": "SERVICE.SHUTDOWN",
+            "message": "MictlanX Router shutting down...",
+            "uptime_seconds": round(elapsed, 2),
+        })
+
+peers_controller   = Cx.PeersController(log = L, tracer=tracer, network_id=config.MICTLANX_ROUTER_NETWORK_ID, max_peers_rf=config.MICTLANX_ROUTER_MAX_PEERS_RF)
+buckets_controller = Cx.BucketsController(log = L,tracer=tracer,cache = cache)
+cache_controller   = Cx.CacheController(log = L, cache =cache,tracer=tracer)
 
 app = FastAPI(
     root_path = os.environ.get("OPENAPI_PREFIX","/mictlanx"),
@@ -190,39 +164,26 @@ app = FastAPI(
 FastAPIInstrumentor.instrument_app(app)
 Instrumentator().instrument(app).expose(app)
 
-MICTLANX_CORS_ALLOW_ORIGINS     = os.environ.get("MICTLANX_CORS_ALLOW_ORIGINS","*")
-MICTLANX_CORS_ALLOW_CREDENTILAS = bool(int(os.environ.get("MICTLANX_CORS_ALLOW_CREDENTILAS","1")))
-MICTLANX_CORS_ALLOW_METHODS     = os.environ.get("MICTLANX_CORS_ALLOW_METHODS","*")
-MICTLANX_CORS_ALLOW_HEADERS     = os.environ.get("MICTLANX_CORS_ALLOW_HEADERS","*")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[MICTLANX_CORS_ALLOW_ORIGINS],
-    allow_credentials=MICTLANX_CORS_ALLOW_CREDENTILAS,
-    allow_methods=[MICTLANX_CORS_ALLOW_METHODS],
-    allow_headers=[MICTLANX_CORS_ALLOW_HEADERS]
+    allow_origins=      [config.MICTLANX_CORS_ALLOW_ORIGINS],
+    allow_credentials=   config.MICTLANX_CORS_ALLOW_CREDENTILAS,
+    allow_methods=      [config.MICTLANX_CORS_ALLOW_METHODS],
+    allow_headers=      [config.MICTLANX_CORS_ALLOW_HEADERS]
 )
-
-
-
-MICTLANX_OPEN_API_TITLE       = os.environ.get("MICTLANX_OPEN_API_TITLE","MictlanX Router")
-MICTLANX_OPEN_API_VERSION     = os.environ.get("MICTLANX_OPEN_API_VERSION","0.1.0a0")
-MICTLANX_OPEN_API_SUMMARY     = os.environ.get("MICTLANX_OPEN_API_SUMMARY","MictlanX Router: Virtual storage spaces management.")
-MICTLANX_OPEN_API_DESCRIPTION = os.environ.get("MICTLANX_OPEN_API_DESCRIPTION","")
-MICTLANX_OPEN_API_LOGO        = os.environ.get("MICTLANX_OPEN_API_LOGO","")
 
 def generate_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     openapi_schema = get_openapi(
-        title       = MICTLANX_OPEN_API_TITLE,
-        version     = MICTLANX_OPEN_API_VERSION,
-        summary     = MICTLANX_OPEN_API_SUMMARY,
-        description = MICTLANX_OPEN_API_DESCRIPTION,
+        title       = config.MICTLANX_OPEN_API_TITLE,
+        version     = config.MICTLANX_OPEN_API_VERSION,
+        summary     = config.MICTLANX_OPEN_API_SUMMARY,
+        description = config.MICTLANX_OPEN_API_DESCRIPTION,
         routes      = app.routes,
     )
     openapi_schema["info"]["x-logo"] = {
-        "url": MICTLANX_OPEN_API_LOGO
+        "url": config.MICTLANX_OPEN_API_LOGO
     }
     app.openapi_schema = openapi_schema
     return app.openapi_schema
