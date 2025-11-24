@@ -64,7 +64,7 @@ services:
       MICTLANX_PORT: "5555"
       MICTLANX_IP_ADDR: "*"
       MICTLANX_PROTOCOL: "tcp"
-      MICTLANX_DEBUG: "0"
+      MICTLANX_ROUTER_DEBUG: "0"
       LOCAL_STORE_PATH: "/mictlanx/db/x.json"
       STORAGE_PEER_MANAGER_SHOW_LOGS: "INFO"
       DEFAULT_PEER_MEMORY: "2GB"
