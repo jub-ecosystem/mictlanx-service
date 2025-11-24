@@ -1,10 +1,10 @@
-from mictlanx.logger.log import Log
+import logging
 from fastapi import APIRouter,HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from mictlanxrouter.tasksx import TaskManagerX
 class TasksController():
-    def __init__(self,log:Log, tm:TaskManagerX):
+    def __init__(self,log:logging.Logger, tm:TaskManagerX):
         self.log = log
         self.tm = tm
         self.router = APIRouter()
