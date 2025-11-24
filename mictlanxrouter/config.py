@@ -60,7 +60,7 @@ MICTLANX_TEST = _get_bool("MICTLANX_TEST", "0")
 # Flag to enable debug mode (more logs, console span exporter, etc.).
 MICTLANX_ROUTER_DEBUG = _get_bool("MICTLANX_ROUTER_DEBUG", "0")
 # Base directory where log files will be stored.
-MICTLANX_ROUTER_LOG_PATH = os.environ.get("MICTLANX_ROUTER_LOG_PATH", "/log")
+MICTLANX_ROUTER_LOG_PATH = os.environ.get("MICTLANX_ROUTER_LOG_PATH", "/mictlanx/router")
 # Base name of the router logger (used in the JSON logger).
 MICTLANX_ROUTER_LOG_NAME = os.environ.get("MICTLANX_ROUTER_LOG_NAME", "mictlanx-router-0")
 # Log rotation interval (number of units defined by WHEN).
