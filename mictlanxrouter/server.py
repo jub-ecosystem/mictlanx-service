@@ -51,6 +51,7 @@ else:
     from unittest.mock import MagicMock
     trace               = MagicMock()
     FastAPIInstrumentor = MagicMock()
+    tracer = MagicMock()
 
 
 import signal
