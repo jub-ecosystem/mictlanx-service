@@ -514,7 +514,7 @@ class BucketsController():
                         tags         = metadata.tags,
                         is_disable   = metadata.is_disabled,
                         headers      = headers
-                    ) for r in replicas])
+                    ) for r in replicas],return_exceptions=True)
 
                     for replica,put_metadata_result in results:
 

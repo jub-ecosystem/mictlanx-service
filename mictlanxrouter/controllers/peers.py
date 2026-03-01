@@ -167,13 +167,6 @@ class PeersController():
                     "reason":e.response.reason,
                 })
                 raise HTTPException(status_code=status_code, detail=detail  )
-            except R.exceptions.ConnectionError as e:
-                detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
-                self.log.error({
-                    "detail":detail,
-                    "status_code":500
-                })
-                raise HTTPException(status_code=500, detail=detail  )
             except Exception as e:
                 self.log.error({
                     "event":"ADD.PEERS.FAILED",

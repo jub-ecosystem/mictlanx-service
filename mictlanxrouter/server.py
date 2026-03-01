@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from option import Some
 from ipaddress import IPv4Network
 # Open telemetry
+
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -30,7 +31,21 @@ from mictlanxrouter.log.logger_config import get_logger
 from mictlanx.services import  Summoner
 
 
-from mictlanxrouter.middlewares import CPUProfilerMiddleware,MemoryProfilerMiddleware
+# from mictlanxrouter.middlewares import CPUProfilerMiddleware,MemoryProfilerMiddleware
+try:
+    from mictlanxrouter.middlewares import CPUProfilerMiddleware, MemoryProfilerMiddleware
+    
+except ImportError as _profiling_import_error:
+    class _MissingDependencyMiddleware:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "CPU/Memory profiling middleware requires optional dependencies "
+                "(e.g. 'pyinstrument' for CPU profiling and 'memray' for memory "
+                "profiling) which are not installed. Install the required "
+                "packages to enable profiling."
+            ) from _profiling_import_error
+    CPUProfilerMiddleware = _MissingDependencyMiddleware
+    MemoryProfilerMiddleware = _MissingDependencyMiddleware
 
 
 L = get_logger(name=config.MICTLANX_ROUTER_LOG_NAME)
