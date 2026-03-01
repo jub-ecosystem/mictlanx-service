@@ -1,0 +1,2 @@
+from mictlanxrouter.middlewares.cpu_profiler import CPUProfilerMiddleware
+from mictlanxrouter.middlewares.memory_profiler import MemoryProfilerMiddleware

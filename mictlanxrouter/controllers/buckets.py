@@ -3,12 +3,9 @@ import asyncio
 import humanfriendly as HF
 from typing import Annotated,Union,List,Dict,Tuple,Iterator
 import time as T
-import requests  as R
 import aiofiles
 import itertools
 import logging
-# 
-from option import Result
 # 
 import httpx
 # 
@@ -26,7 +23,7 @@ import mictlanx.interfaces as InterfaceX
 import mictlanx.interfaces.responses as ResponseModels
 # 
 from mictlanxrm.client import SPMClient
-from mictlanxrm.models import TaskX
+from mictlanxrm.models import TaskX,AsyncPeer
 # 
 from mictlanxrouter.dto import Operations,DeletedByBallIdResponse,DeletedByKeyResponse
 from mictlanxrouter.caching import CacheX
@@ -84,16 +81,16 @@ class BucketsController():
     def __init__(self,
                  log:logging.Logger,
                  cache:CacheX,
-                tracer:Tracer,
+                 tracer:Tracer,
                  max_timeout:str= "10s", 
     ):
         self.log         = log
         self.router      = APIRouter()
+        self.tracer      = tracer
         self.cache       = cache
         self.max_timeout = HF.parse_timespan(max_timeout)
         self.dep         = DependencyContainer(log=self.log)
         self.is_testing  =  bool(int(os.environ.get("MICTLANX_TEST","0")))
-        # self.spm_client = SPMClient()
         self.add_routes()
 
     def get_spm_client(self):
@@ -138,7 +135,6 @@ class BucketsController():
     async def delete_replicas_by_peer_ids(self, bucket_id:str, key:str, peer_ids:List[str], spm_client:SPMClient):
         for peer_id in peer_ids:
             result = await spm_client.delete(bucket_id=bucket_id, key=key, peer_ids=[peer_id])
-            print("RESULT",result)
             if result.is_err:
                 self.log.error({
                     "event":"DELETE.REPLICA.FAILED",
@@ -234,7 +230,7 @@ class BucketsController():
                         "response_time":T.time() - start_time
                     })
                     return JSONResponse(content=jsonable_encoder(response))
-                except R.exceptions.HTTPError as e:
+                except httpx._exceptions.HTTPError as e:
                     detail = str(e.response.content.decode("utf-8") )
                     # e.response.reason
                     status_code = e.response.status_code
@@ -244,7 +240,7 @@ class BucketsController():
                         "reason":e.response.reason,
                     })
                     raise HTTPException(status_code=status_code, detail=detail  )
-                except R.exceptions.ConnectionError as e:
+                except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                     detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                     self.log.error({
                         "detail":detail,
@@ -305,7 +301,7 @@ class BucketsController():
                 # METADATA_ACCESS_COUNTER.labels(bucket_id=bucket_id, key = key).inc()
 
                 return JSONResponse(content=jsonable_encoder(most_recent_metadata) )
-            except R.exceptions.HTTPError as e:
+            except httpx._exceptions.HTTPError as e:
                 detail = str(e.response.content.decode("utf-8") )
                 status_code = e.response.status_code
                 self.log.error({
@@ -315,7 +311,7 @@ class BucketsController():
                     "reason":e.response.reason,
                 })
                 raise HTTPException(status_code=status_code, detail=detail  )
-            except R.exceptions.ConnectionError as e:
+            except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                 detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                 self.log.error({
                     "event":"CONNECTION.ERROR",
@@ -478,21 +474,64 @@ class BucketsController():
                     tasks_ids = []
                     peers_ids = []
 
-                    for replica in replicas:
-
-                        inner_start_time = T.time()
-                        put_metadata_result = await replica.put_metadata(
-                            bucket_id    = metadata.bucket_id,
-                            key          = metadata.key,
-                            ball_id      = metadata.ball_id,
-                            size         = metadata.size,
-                            checksum     = metadata.checksum,
-                            producer_id  = metadata.producer_id,
-                            content_type = metadata.content_type,
-                            tags         = metadata.tags,
-                            is_disable   = metadata.is_disabled,
+                    # [Temporal solution, no time] Provisional solution to avoid making the put_metadata calls sequentially.
+                    async def __put_metadata(
+                            replica:AsyncPeer,
+                            bucket_id:str,
+                            key:str,
+                            ball_id:str,
+                            size:int,
+                            checksum:str,
+                            producer_id:str,
+                            content_type:str,
+                            tags:Dict[str,str],
+                            is_disable:bool,
+                            headers:Dict[str,str],
+                    ):
+                        result = await replica.put_metadata(
+                            bucket_id    = bucket_id,
+                            key          = key,
+                            ball_id      = ball_id,
+                            size         = size,
+                            checksum     = checksum,
+                            producer_id  = producer_id,
+                            content_type = content_type,
+                            tags         = tags,
+                            is_disable   = is_disable,
                             headers      = headers
                         )
+                        return replica,result
+                        
+                    results = await asyncio.gather(*[__put_metadata(
+                        replica       = r,
+                        bucket_id    = metadata.bucket_id,
+                        key          = metadata.key,
+                        ball_id      = metadata.ball_id,
+                        size         = metadata.size,
+                        checksum     = metadata.checksum,
+                        producer_id  = metadata.producer_id,
+                        content_type = metadata.content_type,
+                        tags         = metadata.tags,
+                        is_disable   = metadata.is_disabled,
+                        headers      = headers
+                    ) for r in replicas],return_exceptions=True)
+
+                    for replica,put_metadata_result in results:
+
+                        inner_start_time = T.time()
+
+                        # put_metadata_result = await replica.put_metadata(
+                        #     bucket_id    = metadata.bucket_id,
+                        #     key          = metadata.key,
+                        #     ball_id      = metadata.ball_id,
+                        #     size         = metadata.size,
+                        #     checksum     = metadata.checksum,
+                        #     producer_id  = metadata.producer_id,
+                        #     content_type = metadata.content_type,
+                        #     tags         = metadata.tags,
+                        #     is_disable   = metadata.is_disabled,
+                        #     headers      = headers
+                        # )
                         if put_metadata_result.is_err:
                             _ps = completed_replicas + [replica.peer_id]
                             await self.delete_replicas_by_peer_ids(bucket_id=bucket_id, key=metadata.key, peer_ids=_ps, spm_client=spm_client)
@@ -703,6 +742,7 @@ class BucketsController():
                         "error":str(_res.unwrap_err())
                     })
                     raise HTTPException(status_code=500, detail=detail)
+                del value
                 return Response(content=None, status_code=201)
 
            
@@ -747,16 +787,6 @@ class BucketsController():
                 key = tasks.tasks[0].key
 
 
-
-                # if task.operation.value != Operations.PUT.value:
-                #     detail = f"Expected task operation [PUT], but was received [{task.operation}]"
-                #     self.log.error({
-                #         "detail":detail,
-                #     })
-                #     raise HTTPException(status_code=409, detail=detail)
-
-                    # ============ STREAM TO TEMP FILE ============
- 
                 total =0
                 t_transfer = T.time()
                 async with aiofiles.open(tmp_path, "wb") as f:
@@ -893,8 +923,14 @@ class BucketsController():
                         })
                     finally:
                         try:
+                            t1x= T.time()
                             if os.path.exists(file_path):
                                 os.remove(file_path)
+                                self.log.info({
+                                    "event": "REMOVE.TMP.FILE",
+                                    "file_path": file_path,
+                                    "time": T.time() - t1x
+                                })
                         except Exception as e:
                             self.log.error({
                                 "error_type":"FAILED.REMOVE.TMP.FILE",
@@ -953,7 +989,7 @@ class BucketsController():
                 })
                 raise HTTPException(status_code=500, detail=str(e))
 
-            except R.exceptions.HTTPError as e:
+            except httpx._exceptions.HTTPError as e:
                 detail = e.response.content.decode("utf-8")
                 self.log.error({
                     "event": "HTTP.ERROR",
@@ -963,7 +999,7 @@ class BucketsController():
                 })
                 raise HTTPException(status_code=e.response.status_code, detail=detail)
 
-            except R.exceptions.ConnectionError as e:
+            except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                 detail = f"Connection error - peers unavailable - {peer.peer_id}"
                 self.log.error({
                     "event": "CONNECTION.ERROR",
@@ -987,7 +1023,6 @@ class BucketsController():
                     pass
 
 
-        # @disconnect_protected()
         @self.router.post("/api/v4/buckets/data/{task_id}/chunkedv1")
         async def put_data_chunked_v1(
             task_id:str,
@@ -1074,7 +1109,7 @@ class BucketsController():
                     "status_code":e.status_code
                 })
                 raise HTTPException(status_code=500, detail = str(e))
-            except R.exceptions.HTTPError as e:
+            except httpx._exceptions.HTTPError as e:
                 detail = str(e.response.content.decode("utf-8") )
                 # e.response.reason
                 status_code = e.response.status_code
@@ -1085,7 +1120,7 @@ class BucketsController():
                     "reason":e.response.reason,
                 })
                 raise HTTPException(status_code=status_code, detail=detail  )
-            except R.exceptions.ConnectionError as e:
+            except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                 detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                 self.log.error({
                     "event":"CONNECTION.ERROR",
@@ -1101,7 +1136,6 @@ class BucketsController():
                 })
                 raise HTTPException(status_code=500, detail = str(e))
 
-        # @disconnect_protected()
         @self.router.post("/api/v4/buckets/{bucket_id}/{key}/disable")
         async def disable(bucket_id:str, key:str,spm_client:SPMClient = Depends(self.get_spm_client)):
             try:
@@ -1116,7 +1150,17 @@ class BucketsController():
                 peers = peers_res.unwrap().replicas
                 
                 for peer in peers:
-                    res = await peer.disable(bucket_id=bucket_id,key=key,headers=headers)
+                    async_peer = peer.to_async_peer()
+                    res = await async_peer.disable(bucket_id=bucket_id,key=key,headers=headers)
+                    if res.is_err:
+                        self.log.error({
+                            "event":"DISABLE.FAILED",
+                            "bucket_id":bucket_id,
+                            "key":key,
+                            "peer_id":peer.peer_id,
+                            "error":str(res.unwrap_err())
+                        })
+                        # raise HTTPException("Failed to disable replica on peer {}".format(peer.peer_id))
                 self.log.info({
                     "event":"DISABLE.COMPLETED",
                     "bucket_id":bucket_id,
@@ -1126,7 +1170,7 @@ class BucketsController():
                 })
                 return Response(content=None, status_code=204)
 
-            except R.exceptions.HTTPError as e:
+            except httpx._exceptions.HTTPError as e:
                 detail = str(e.response.content.decode("utf-8") )
                 status_code = e.response.status_code
                 self.log.error({
@@ -1135,7 +1179,7 @@ class BucketsController():
                     "reason":e.response.reason,
                 })
                 raise HTTPException(status_code=status_code, detail=detail  )
-            except R.exceptions.ConnectionError as e:
+            except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                 detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                 self.log.error({
                     "detail":detail,
@@ -1438,7 +1482,7 @@ class BucketsController():
                     "status_code":e.status_code
                 })
                 raise HTTPException(status_code=e.status_code, detail = e.detail, headers=e.headers)
-            except R.exceptions.HTTPError as e:
+            except httpx._exceptions.HTTPError as e:
                 detail = str(e.response.content.decode("utf-8") )
                 # e.response.reason
                 status_code = e.response.status_code
@@ -1449,7 +1493,7 @@ class BucketsController():
                     "reason":e.response.reason,
                 })
                 raise HTTPException(status_code=status_code, detail=detail  )
-            except R.exceptions.ConnectionError as e:
+            except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                 detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                 self.log.error({
                     "event":"CONNECTION.ERROR",
@@ -1541,7 +1585,7 @@ class BucketsController():
                 }
 
 
-            except R.exceptions.HTTPError as e:
+            except httpx._exceptions.HTTPError as e:
                 detail = str(e.response.content.decode("utf-8") )
                 # e.response.reason
                 status_code = e.response.status_code
@@ -1551,7 +1595,7 @@ class BucketsController():
                     "reason":e.response.reason,
                 })
                 raise HTTPException(status_code=status_code, detail=detail  )
-            except R.exceptions.ConnectionError as e:
+            except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                 detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                 self.log.error({
                     "detail":detail,
@@ -1633,7 +1677,7 @@ class BucketsController():
                     })
                     
                     return JSONResponse(content=jsonable_encoder(default_delete_by_key_response.model_dump()))
-                except R.exceptions.HTTPError as e:
+                except httpx._exceptions.HTTPError as e:
                         detail = str(e.response.content.decode("utf-8") )
                         status_code = e.response.status_code
                         self.log.error({
@@ -1642,7 +1686,7 @@ class BucketsController():
                             "reason":e.response.reason,
                         })
                         raise HTTPException(status_code=status_code, detail=detail  )
-                except R.exceptions.ConnectionError as e:
+                except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                     detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                     self.log.error({
                         "detail":detail,
@@ -1770,7 +1814,7 @@ class BucketsController():
                         "response_time":T.time() - _start_time,
                     })
                     return JSONResponse(content=jsonable_encoder(default_del_by_ball_id_response))
-                except R.exceptions.HTTPError as e:
+                except httpx._exceptions.HTTPError as e:
                     detail = str(e.response.content.decode("utf-8") )
                     status_code = e.response.status_code
                     self.log.error({
@@ -1779,7 +1823,7 @@ class BucketsController():
                         "reason":e.response.reason,
                     })
                     raise HTTPException(status_code=status_code, detail=detail  )
-                except R.exceptions.ConnectionError as e:
+                except (httpx._exceptions.ConnectError, httpx._exceptions.ConnectTimeout) as e:
                     detail = "Connection error - peers unavailable - {}".format(peer.peer_id)
                     self.log.error({
                         "detail":detail,

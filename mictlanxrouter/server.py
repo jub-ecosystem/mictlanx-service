@@ -1,37 +1,89 @@
-import os
+import os 
 import sys
+from mictlanxrouter import config
+IS_TEST_ENV = os.environ.get("GITHUB_ACTIONS") == "true" or "pytest"in sys.modules
+print("IS_TEST_ENV:", IS_TEST_ENV)
+
+if not IS_TEST_ENV:
+    # Open telemetry
+    #_______________________
+    from mictlanxrouter.opentelemetry import NoOpSpanExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import (
+        BatchSpanProcessor,
+        ConsoleSpanExporter
+    )
+    from prometheus_fastapi_instrumentator import Instrumentator
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    resource = Resource(
+        attributes={
+            SERVICE_NAME: config.MICTLANX_ROUTER_SERVICE_NAME
+        }
+    )
+
+
+    trace_provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(trace_provider)
+    tracer = trace.get_tracer(config.MICTLANX_ROUTER_SERVICE_NAME)
+
+
+    if not config.MICTLANX_ROUTER_OPENTELEMETRY:
+        trace_provider.add_span_processor(SimpleSpanProcessor(NoOpSpanExporter()))
+    else:
+        # ===========================================================
+        # JAEGER
+        # ===========================================================
+        processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="{}/v1/traces".format(config.MICTLANX_JAEGER_ENDPOINT)))
+        trace_provider.add_span_processor(processor)
+
+    # ===========================================================
+    # CONSOLE_SPAN_EXPORTER
+    # ===========================================================
+    if config.MICTLANX_ROUTER_DEBUG:
+        processor = BatchSpanProcessor(ConsoleSpanExporter())
+        trace_provider.add_span_processor(processor)
+else:
+    # Mocking OpenTelemetry components for testing environment like Github Actions
+    from unittest.mock import MagicMock
+    trace               = MagicMock()
+    FastAPIInstrumentor = MagicMock()
+    tracer = MagicMock()
+    Instrumentator      = MagicMock()
+
+
 import signal
 from contextlib import asynccontextmanager
 import time as T
-from dotenv import load_dotenv
-# 
-import humanfriendly as HF
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from option import Some
 from ipaddress import IPv4Network
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import (
-    BatchSpanProcessor,
-    ConsoleSpanExporter
-)
-from prometheus_fastapi_instrumentator import Instrumentator
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-#
 import mictlanxrouter.caching as ChX
 import mictlanxrouter.controllers as Cx
-from mictlanxrouter.opentelemetry import NoOpSpanExporter
-from mictlanxrouter import config
 # 
 from mictlanxrouter.log.logger_config import get_logger
 from mictlanx.services import  Summoner
 
-from mictlanx.utils.uri import MictlanXURI
+
+try:
+    from mictlanxrouter.middlewares import CPUProfilerMiddleware, MemoryProfilerMiddleware
+    
+except ImportError as _profiling_import_error:
+    class _MissingDependencyMiddleware:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "CPU/Memory profiling middleware requires optional dependencies "
+                "(e.g. 'pyinstrument' for CPU profiling and 'memray' for memory "
+                "profiling) which are not installed. Install the required "
+                "packages to enable profiling."
+            ) from _profiling_import_error
+    CPUProfilerMiddleware = _MissingDependencyMiddleware
+    MemoryProfilerMiddleware = _MissingDependencyMiddleware
 
 
 L = get_logger(name=config.MICTLANX_ROUTER_LOG_NAME)
@@ -47,31 +99,6 @@ else:
 
 
 
-resource = Resource(
-    attributes={
-        SERVICE_NAME: config.MICTLANX_ROUTER_SERVICE_NAME
-    }
-)
-
-
-trace_provider = TracerProvider(resource=resource)
-trace.set_tracer_provider(trace_provider)
-tracer = trace.get_tracer(config.MICTLANX_ROUTER_SERVICE_NAME)
-if not config.MICTLANX_ROUTER_OPENTELEMETRY:
-    trace_provider.add_span_processor(SimpleSpanProcessor(NoOpSpanExporter()))
-else:
-    # ===========================================================
-    # JAEGER
-    # ===========================================================
-    processor = BatchSpanProcessor(OTLPSpanExporter(endpoint="{}/v1/traces".format(config.MICTLANX_JAEGER_ENDPOINT)))
-    trace_provider.add_span_processor(processor)
-
-# ===========================================================
-# CONSOLE_SPAN_EXPORTER
-# ===========================================================
-if config.MICTLANX_ROUTER_DEBUG:
-    processor = BatchSpanProcessor(ConsoleSpanExporter())
-    trace_provider.add_span_processor(processor)
 
 
 # ===========================================================
@@ -166,11 +193,27 @@ Instrumentator().instrument(app).expose(app)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=      [config.MICTLANX_CORS_ALLOW_ORIGINS],
-    allow_credentials=   config.MICTLANX_CORS_ALLOW_CREDENTILAS,
-    allow_methods=      [config.MICTLANX_CORS_ALLOW_METHODS],
-    allow_headers=      [config.MICTLANX_CORS_ALLOW_HEADERS]
+    allow_origins     = [config.MICTLANX_CORS_ALLOW_ORIGINS],
+    allow_credentials = config.MICTLANX_CORS_ALLOW_CREDENTILAS,
+    allow_methods     = [config.MICTLANX_CORS_ALLOW_METHODS],
+    allow_headers     = [config.MICTLANX_CORS_ALLOW_HEADERS]
 )
+
+
+if config.MICTLANX_ROUTER_PROFILER:
+    app.add_middleware(
+        CPUProfilerMiddleware,
+        output_dir        = config.MICTLANX_ROUTER_PROFILER_OUTPUT_DIR,
+        enable_by_default = config.MICTLANX_ROUTER_PROFILER_ENABLE_BY_DEFAULT
+    )
+
+if config.MICTLANX_ROUTER_MEMORY_PROFILER:
+    app.add_middleware(
+        MemoryProfilerMiddleware,
+        output_dir        = config.MICTLANX_ROUTER_MEMORY_PROFILER_OUTPUT_DIR,
+        enable_by_default = config.MICTLANX_ROUTER_MEMORY_PROFILER_ENABLE_BY_DEFAULT,
+        report_args       = config.MICTLANX_ROUTER_MEMORY_PROFILER_REPORT_ARGS
+    )
 
 def generate_openapi():
     if app.openapi_schema:

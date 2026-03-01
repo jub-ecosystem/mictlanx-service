@@ -4,3 +4,5 @@ xolo-api.yml
 *.tar.gz
 *.lock
 *.pem
+.coverage
+.pytest_cache/
