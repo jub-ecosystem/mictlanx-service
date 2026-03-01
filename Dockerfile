@@ -9,10 +9,12 @@ ENV POETRY_NO_INTERACTION=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml .
+COPY pyproject.toml poetry.lock .
 RUN touch README.md
 
 RUN --mount=type=cache,target=$POETRY_CACHE_DIR poetry install --without dev --no-root
+
+
 
 FROM python:3.11-slim-buster AS runtime
 
