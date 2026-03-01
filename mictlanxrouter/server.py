@@ -3,14 +3,12 @@ import sys
 import signal
 from contextlib import asynccontextmanager
 import time as T
-from dotenv import load_dotenv
-# 
-import humanfriendly as HF
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from option import Some
 from ipaddress import IPv4Network
+# Open telemetry
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -22,7 +20,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-#
+#_______________________
 import mictlanxrouter.caching as ChX
 import mictlanxrouter.controllers as Cx
 from mictlanxrouter.opentelemetry import NoOpSpanExporter
@@ -31,7 +29,8 @@ from mictlanxrouter import config
 from mictlanxrouter.log.logger_config import get_logger
 from mictlanx.services import  Summoner
 
-from mictlanx.utils.uri import MictlanXURI
+
+from mictlanxrouter.middlewares import CPUProfilerMiddleware,MemoryProfilerMiddleware
 
 
 L = get_logger(name=config.MICTLANX_ROUTER_LOG_NAME)
@@ -171,6 +170,22 @@ app.add_middleware(
     allow_methods=      [config.MICTLANX_CORS_ALLOW_METHODS],
     allow_headers=      [config.MICTLANX_CORS_ALLOW_HEADERS]
 )
+
+
+if config.MICTLANX_ROUTER_PROFILER:
+    app.add_middleware(
+        CPUProfilerMiddleware,
+        output_dir        = config.MICTLANX_ROUTER_PROFILER_OUTPUT_DIR,
+        enable_by_default = config.MICTLANX_ROUTER_PROFILER_ENABLE_BY_DEFAULT
+    )
+
+if config.MICTLANX_ROUTER_MEMORY_PROFILER:
+    app.add_middleware(
+        MemoryProfilerMiddleware,
+        output_dir        = config.MICTLANX_ROUTER_MEMORY_PROFILER_OUTPUT_DIR,
+        enable_by_default = config.MICTLANX_ROUTER_MEMORY_PROFILER_ENABLE_BY_DEFAULT,
+        report_args       = config.MICTLANX_ROUTER_MEMORY_PROFILER_REPORT_ARGS
+    )
 
 def generate_openapi():
     if app.openapi_schema:
