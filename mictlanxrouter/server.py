@@ -52,6 +52,7 @@ else:
     trace               = MagicMock()
     FastAPIInstrumentor = MagicMock()
     tracer = MagicMock()
+    Instrumentator      = MagicMock()
 
 
 import signal
