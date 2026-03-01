@@ -1,5 +1,25 @@
-import os
+import os 
 import sys
+IS_TEST_ENV = os.environ.get("GITHUB_ACTIONS") == "true" or "pytest"in sys.modules
+print("IS_TEST_ENV:", IS_TEST_ENV)
+if not IS_TEST_ENV:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import (
+        BatchSpanProcessor,
+        ConsoleSpanExporter
+    )
+    from prometheus_fastapi_instrumentator import Instrumentator
+    from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+else:
+    # Mocking OpenTelemetry components for testing environment like Github Actions
+    from unittest.mock import MagicMock
+    trace               = MagicMock()
+    FastAPIInstrumentor = MagicMock()
+
 import signal
 from contextlib import asynccontextmanager
 import time as T
@@ -10,17 +30,6 @@ from option import Some
 from ipaddress import IPv4Network
 # Open telemetry
 
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import (
-    BatchSpanProcessor,
-    ConsoleSpanExporter
-)
-from prometheus_fastapi_instrumentator import Instrumentator
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 #_______________________
 import mictlanxrouter.caching as ChX
 import mictlanxrouter.controllers as Cx
