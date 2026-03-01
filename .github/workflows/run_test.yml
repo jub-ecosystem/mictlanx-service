@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest  
     env:
       MICTLANX_LOG_PATH: ${{ github.workspace }}/mictlanx/client
+      MICTLANX_ROUTER_LOG_PATH: ${{ github.workspace }}/mictlanx/router
     strategy:  
       matrix:  
         python-version: ["3.9"]  
@@ -30,6 +31,7 @@ jobs:
       - name: Prepare log folder
         run: |
           mkdir -p "${MICTLANX_LOG_PATH}"
+          mkdir -p "${MICTLANX_ROUTER_LOG_PATH}"
       - name: Start MictlanX Router
         run: |
           chmod +x deploy.sh && ./deploy.sh

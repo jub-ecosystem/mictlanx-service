@@ -6,7 +6,7 @@ import time as T
 import requests  as R
 import aiofiles
 import itertools
-
+import logging
 # 
 from option import Result
 # 
@@ -21,7 +21,6 @@ from fastapi.responses import StreamingResponse
 # 
 from nanoid import generate as nanoid
 # 
-from mictlanx.logger.log import Log
 from mictlanx.utils import Utils as MictlanXUtils
 import mictlanx.interfaces as InterfaceX
 import mictlanx.interfaces.responses as ResponseModels
@@ -41,7 +40,7 @@ from opentelemetry.trace import Tracer,Status,StatusCode
 
 
 class DependencyContainer:
-    def __init__(self, log:Log):
+    def __init__(self, log:logging.Logger):
         self.log = log
 
     @contextmanager
@@ -83,7 +82,7 @@ def retry_spm_client(dep: DependencyContainer):
 
 class BucketsController():
     def __init__(self,
-                 log:Log,
+                 log:logging.Logger,
                  cache:CacheX,
                 tracer:Tracer,
                  max_timeout:str= "10s", 

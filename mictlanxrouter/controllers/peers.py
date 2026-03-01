@@ -1,5 +1,6 @@
 
 import os
+import logging
 from typing import List,Dict
 import time as T
 import requests as R
@@ -15,12 +16,12 @@ from mictlanxrouter.dto.index import PeerPayload
 import mictlanxrm.models as MX
 # 
 from mictlanx.interfaces import PeerStatsResponse
-from mictlanx.logger.log import Log
+
 from mictlanxrm.client import SPMClient
 
 class PeersController():
     def __init__(self, 
-            log:Log,
+            log:logging.Logger,
             tracer:Tracer,
             network_id:str ="mictlanx",
             max_peers_rf:int = 5
@@ -308,7 +309,3 @@ class PeersController():
                         "reason":e.response.reason,
                     })
                     raise HTTPException(status_code=status_code, detail=detail  )
-    
- 
-
-      

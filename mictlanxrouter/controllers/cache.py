@@ -1,14 +1,12 @@
 from fastapi import APIRouter,HTTPException,Response
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from mictlanx.logger.log import Log
+import logging
 from mictlanxrouter.caching import CacheX
 from opentelemetry.trace import Tracer,Status,StatusCode
+
 class CacheController:
-    def __init__(self,log:Log, cache:CacheX,tracer:Tracer
-
-
-                 ):
+    def __init__(self,log:logging.Logger, cache:CacheX,tracer:Tracer):
         self.router = APIRouter()
         self.log=log
         self.cache= cache

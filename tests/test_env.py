@@ -3,7 +3,7 @@ from importlib import reload
 
 import pytest
 
-import mictlanxrouter.server as server
+import mictlanxrouter.config as env
 
 
 CRITICAL_ENV_VARS = [
@@ -35,9 +35,9 @@ def test_server_reads_env_variables(monkeypatch):
     monkeypatch.setenv("MICTLANX_ROUTER_SERVICE_NAME", "mictlanx-router-test")
 
     # Act: We reloaded the module so that it can read os.environ again
-    reload(server)
+    reload(env)
 
     # Assert: we check that the module constants reflect the environment
-    assert server.MICTLANX_ROUTER_HOST == "test-host"
-    assert server.MICTLANX_ROUTER_PORT == 12345
-    assert server.MICTLANX_ROUTER_SERVICE_NAME == "mictlanx-router-test"
+    assert env.MICTLANX_ROUTER_HOST == "test-host"
+    assert env.MICTLANX_ROUTER_PORT == 12345
+    assert env.MICTLANX_ROUTER_SERVICE_NAME == "mictlanx-router-test"
