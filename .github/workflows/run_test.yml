@@ -24,17 +24,22 @@ jobs:
         uses: actions/setup-python@v4  
         with:  
           python-version: ${{ matrix.python-version }}
-          cache: "poetry"  
 
       - name: Install Poetry
         uses: abatilo/actions-poetry@v3
+
+      - name: Configure Poetry
+        run: |
+          poetry config virtualenvs.create true
+          poetry config virtualenvs.in-project true
 
       - name: Force Poetry to use Matrix Python
         run: |
           poetry env use $(which python)
           echo "Python version: $(poetry run python --version)"
-          pip install setuptools
+          poetry run pip install setuptools
           poetry install --no-interaction
+
       - name: Prepare log folder
         run: |
           mkdir -p "${MICTLANX_LOG_PATH}"
@@ -43,10 +48,11 @@ jobs:
       - name: Start MictlanX Router
         run: |
           chmod +x deploy.sh && ./deploy.sh
-      - name: Configure Poetry
-        run: |
-          poetry config virtualenvs.create true
-          poetry config virtualenvs.in-project true  # Optional: keeps `.venv` inside project
+      
+      # - name: Configure Poetry
+        # run: |
+          # poetry config virtualenvs.create true
+          # poetry config virtualenvs.in-project true  # Optional: keeps `.venv` inside project
 
       - name: Install Dependencies
         run: poetry install --no-interaction
@@ -63,6 +69,7 @@ jobs:
           poetry run coverage run -m pytest  -v -s  
         env:
           LOG_PATH: log  
+          
       - name: Generate Coverage Report  
         run: |  
           poetry run coverage report -m
