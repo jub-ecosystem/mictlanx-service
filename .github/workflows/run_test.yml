@@ -17,7 +17,7 @@ jobs:
       MICTLANX_ROUTER_LOG_PATH: ${{ github.workspace }}/mictlanx/router
     strategy:  
       matrix:  
-        python-version: ["3.9"]  
+        python-version: ["3.10"]  
     steps:  
       - uses: actions/checkout@v3  
       - name: Set up Python ${{ matrix.python-version }}  
@@ -48,11 +48,7 @@ jobs:
       - name: Start MictlanX Router
         run: |
           chmod +x deploy.sh && ./deploy.sh
-      
-      # - name: Configure Poetry
-        # run: |
-          # poetry config virtualenvs.create true
-          # poetry config virtualenvs.in-project true  # Optional: keeps `.venv` inside project
+    
 
       - name: Install Dependencies
         run: poetry install --no-interaction
@@ -69,7 +65,7 @@ jobs:
           poetry run coverage run -m pytest  -v -s  
         env:
           LOG_PATH: log  
-          
+
       - name: Generate Coverage Report  
         run: |  
           poetry run coverage report -m
