@@ -23,15 +23,23 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}  
         uses: actions/setup-python@v4  
         with:  
-          python-version: ${{ matrix.python-version }}  
+          python-version: ${{ matrix.python-version }}
+          cache: "poetry"  
+
       - name: Install Poetry
         uses: abatilo/actions-poetry@v3
+
       - name: Force Poetry to use Matrix Python
-        run: poetry env use $(which python)
+        run: |
+          poetry env use $(which python)
+          echo "Python version: $(poetry run python --version)"
+          pip install setuptools
+          poetry install --no-interaction
       - name: Prepare log folder
         run: |
           mkdir -p "${MICTLANX_LOG_PATH}"
           mkdir -p "${MICTLANX_ROUTER_LOG_PATH}"
+
       - name: Start MictlanX Router
         run: |
           chmod +x deploy.sh && ./deploy.sh
